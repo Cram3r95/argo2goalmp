@@ -36,7 +36,7 @@ BASE_DIR = repo.working_tree_dir
 sys.path.append(BASE_DIR)
 
 from data import ArgoDataset, collate_fn
-from utils import gpu, to_long,  Optimizer, StepLR
+from utils import gpu, to_long, Optimizer, StepLR
 
 # Global variables
 
