@@ -1,8 +1,6 @@
 #!/usr/bin/env python3.8
 # -*- coding: utf-8 -*-
 
-## CGHFormer
-
 """
 Created on Mon May 15 13:47:58 2023
 @author: Carlos Gómez-Huélamo

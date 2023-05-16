@@ -161,4 +161,5 @@ cython_debug/
 
 # This repository
 
+saved_models/
 smarts_simulator_scenarios/

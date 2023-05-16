@@ -1,29 +1,53 @@
 #!/usr/bin/env python3.8
 # -*- coding: utf-8 -*-
 
-## CGHFormer
-
 """
 Created on Mon May 15 13:47:58 2023
 @author: Carlos Gómez-Huélamo
 """
 
-import numpy as np
+# General purpose imports
+
+import git
 import os
-#os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3,4,5,6'
 import sys
-from fractions import gcd
-from numbers import Number
 import pdb
 import copy
 import time
 
+# DL & Math imports
+
+import numpy as np
 import torch
+
+from fractions import gcd
+from numbers import Number
 from torch import Tensor, nn
 from torch.nn import functional as F
 
+# Plot imports
+
+
+
+# Custom imports
+
+repo = git.Repo('.', search_parent_directories=True)
+BASE_DIR = repo.working_tree_dir
+sys.path.append(BASE_DIR)
+
 from data import ArgoDataset, collate_fn
 from utils import gpu, to_long,  Optimizer, StepLR
+
+# Global variables
+
+#######################################
+
+
+
+
+
+
+
 
 from layers import Conv1d, Res1d, Linear, LinearRes, Null, no_pad_Res1d
 from numpy import float64, ndarray

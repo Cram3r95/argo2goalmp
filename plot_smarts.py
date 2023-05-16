@@ -14,10 +14,13 @@ import csv
 import pandas as pd
 import git
 import os
+import aspose.words as aw
 
 from typing import Sequence, Tuple, Optional, List
 
 # DL & Math imports
+
+import numpy as np
 
 # Plot imports
 
@@ -26,6 +29,7 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from matplotlib.axes import Axes
 from matplotlib.patches import Rectangle
+from PIL import Image
 
 # Custom imports
 
@@ -66,8 +70,11 @@ def plot_actor_tracks(ax: plt.Axes,
             color = "#F39C12"
         else:
             color = "#27AE60"
-            
-        plot_polylines(agent_trajectory, agent_id, color=color, line_width=2, zorder=10)
+        try:
+            plot_polylines(agent_trajectory, agent_id, color=color, line_width=2, zorder=10)
+        except:
+            print("Error")
+            pdb.set_trace()
         
 def plot_polylines(
     polyline: NDArrayFloat,
@@ -89,14 +96,17 @@ def plot_polylines(
         color: Desired color for the plotted lines.
     """
 
+    plt.xlim([-30, 30])
+    plt.ylim([0, 100])
+    
     plt.plot(polyline[:, 0], polyline[:, 1], style, linewidth=line_width, color=color, alpha=alpha, zorder=zorder)
     plt.plot(polyline[-1, 0], polyline[-1, 1], "D", color=color, alpha=alpha, zorder=zorder, markersize=9)
-    plt.text(polyline[-1, 0] + 1,
-            polyline[-1, 1] + 1,
-            str(agent_id),
-            zorder=zorder+1,
-            fontsize=10
-            )
+    # plt.text(polyline[-1, 0] + 1,
+    #         polyline[-1, 1] + 1,
+    #         str(agent_id),
+    #         zorder=zorder+1,
+    #         fontsize=10
+    #         )
         
 def main():
     """
@@ -108,7 +118,6 @@ def main():
     file_id_list, _ = utils.get_sorted_file_id_list(files,additional_string=ADDITIONAL_STRING) 
 
     for file_id in file_id_list:
-        if file_id != 73: continue
         
         # Plots
                         
@@ -116,29 +125,53 @@ def main():
         ax = fig.add_subplot(111)
         
         csv_file = os.path.join(SCENARIO_ROUTE, ADDITIONAL_STRING+str(file_id)+".csv")      
-        df = pd.read_csv(csv_file, delim_whitespace=True)
-        
-        # Add column names if it was not previously specified
-
-        df.columns = ["agent_id", "timestamp", "x", "y", "padding"]
+        df = pd.read_csv(csv_file, delim_whitespace=True,
+                         names=["agent_id", "timestamp", "x", "y", "padding"], header=None)
         
         # Get agents of the scene (we assume the first one represents our ego-vehicle)
         
         agents_id = df["agent_id"].unique()
 
-        agents_trajectories = []
-         
+        valid_agents_trajectories = []
+        valid_agents_id = []
+          
         for agent_id in agents_id:
-            agent_data = df[df["agent_id"] == agent_id]
-            
+            agent_data = df[(df["agent_id"] == agent_id) & (df["padding"] == 0.0)]
+
             agent_trajectory = agent_data[["x","y"]].to_numpy()
-            agents_trajectories.append(agent_trajectory)
             
-        plot_actor_tracks(ax, agents_trajectories, agents_id)   
+            if np.any(agent_trajectory):
+                valid_agents_trajectories.append(agent_trajectory)
+                valid_agents_id.append(agent_id)
+
+        plot_actor_tracks(ax, valid_agents_trajectories, valid_agents_id)   
         
-        filename = os.path.join(SAVE_DIR, ADDITIONAL_STRING+str(file_id)+".pdf")
+        filename = os.path.join(SAVE_DIR, ADDITIONAL_STRING+str(file_id)+".png")
         plt.savefig(filename, bbox_inches='tight', facecolor="white", edgecolor='none', pad_inches=0)
         plt.close('all')
-                                   
+    
+    # Create .gif
+
+    ## Get files and sort
+    
+    files, num_files = utils.load_list_from_folder(SAVE_DIR)
+    file_id_list, _ = utils.get_sorted_file_id_list(files,additional_string=ADDITIONAL_STRING) 
+ 
+    frames = []
+    
+    for file_id in file_id_list:
+        filename = os.path.join(SAVE_DIR, ADDITIONAL_STRING+str(file_id)+".png")
+        new_frame = Image.open(filename)
+        frames.append(new_frame)
+    
+    output_file = os.path.join(SAVE_DIR, "output.gif")
+    
+    # Save into a GIF file that loops forever
+    
+    frames[0].save(output_file, format='GIF',
+                append_images=frames[1:],
+                save_all=True,
+                duration=300, loop=0)
+                             
 if __name__ == "__main__":
     main()
