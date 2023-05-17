@@ -1,31 +1,64 @@
-import copy
-import numpy as np
+#!/usr/bin/env python3.8
+# -*- coding: utf-8 -*-
+
+"""
+Created on Mon May 15 13:47:58 2023
+@author: Carlos Gómez-Huélamo
+"""
+
+# General purpose imports
+
+import git
 import os
-#os.environ['CUDA_VISIBLE_DEVICES'] = '1,2,3,4,5,6'
 import sys
+import pdb
+import copy
+import time
+
+from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
+
+# DL & Math imports
+
+import numpy as np
+import torch
+
+from scipy.special import softmax
+from scipy import sparse
+
 from fractions import gcd
 from numbers import Number
-import pdb
 
-import torch
-from torch import Tensor, nn
+from torch import nn, Tensor, optim
 from torch.nn import functional as F
+from torch_geometric.nn import conv
+from torch_geometric.utils import from_scipy_sparse_matrix
+
+from numpy import float64, ndarray
+
+# Plot imports
+
+# Custom imports
+
+repo = git.Repo('.', search_parent_directories=True)
+BASE_DIR = repo.working_tree_dir
+sys.path.append(BASE_DIR)
 
 from data import ArgoDataset, collate_fn
-from utils import gpu, to_long,  Optimizer, StepLR
-
+from utils import gpu, to_long, Optimizer, StepLR
 from layers import Conv1d, Res1d, Linear, LinearRes, Null, no_pad_Res1d
-from numpy import float64, ndarray
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, Union
-from scipy.special import softmax
+
+# Global variables
 
 file_path = os.path.abspath(__file__)
 root_path = os.path.dirname(file_path)
 model_name = os.path.basename(file_path).split(".")[0]
 
-### config ###
+## Configuration
+
 config = dict()
-"""Train"""
+
+### Train
+
 config["display_iters"] = 200000
 config["val_iters"] = 200000 
 config["save_freq"] = 1.0
@@ -33,7 +66,7 @@ config["epoch"] = 0
 config["horovod"] = False
 config["opt"] = "adam"
 config["num_epochs"] = 50
-config["start_val_epoch"] = 30
+config["start_val_epoch"] = 0
 config["lr"] = [1e-3, 1e-4, 5e-5, 1e-5]
 config["lr_epochs"] = [36,42,46]
 config["lr_func"] = StepLR(config["lr"], config["lr_epochs"])
@@ -43,16 +76,16 @@ config["val_batch_size"] = 128
 config["workers"] = 0
 config["val_workers"] = config["workers"]
 
-"""Dataset"""
-# data_path = "/usr/src/app/datasets/motion_forecasting/argoverse2"
+### Dataset
+
 data_path = "/home/robesafe/shared_home/benchmarks/argoverse2/motion-forecasting"
 
-# Raw Dataset
 config["train_split"] = os.path.join(data_path, "train")
 config["val_split"] = os.path.join(data_path, "val")
 config["test_split"] = os.path.join(data_path, "test")
 
-# Preprocessed Dataset
+### Preprocessed Dataset
+
 config["preprocess"] = True # whether use preprocess or not
 config["preprocess_train"] = os.path.join(
     data_path, "preprocess_c", "train_crs_dist6_angle90.p"
@@ -60,25 +93,35 @@ config["preprocess_train"] = os.path.join(
 config["preprocess_val"] = os.path.join(
     data_path, "preprocess_c", "val_crs_dist6_angle90.p"
 )
-config['preprocess_test'] = os.path.join(data_path, 'preprocess_c', 'test_test.p')
+config["preprocess_test"] = os.path.join(data_path, "preprocess_c", "test_test.p")
 
-"""Model"""
+### Model
+
 config["rot_aug"] = False
+config["data_aug_gaussian_noise"] = 0.001
+config["align_image_with_target_x"] = True
 config["pred_range"] = [-100.0, 100.0, -100.0, 100.0]
 config["num_scales"] = 6
+config["num_social_features"] = 6 # dispx (1), dispy (1), mask (1), object_type (3)
+config["num_social_features_refinement"] = 5 # x, y, object_type (3)
 config["n_actor"] = 128
 config["n_map"] = 128
+config["num_attention_heads"] = 32
 config["actor2map_dist"] = 7.0
 config["map2actor_dist"] = 6.0
 config["actor2actor_dist"] = 100.0
 config["pred_size"] = 60
 config["pred_step"] = 1
 config["num_test_mod"] = 3
+config["apply_dropout"] = 0.2
 config["num_preds"] = config["pred_size"] // config["pred_step"]
 config["num_mods"] = 6
-config["cls_coef"] = 3.0
+config["distill_coef"] = 1.0
 config["reg_coef"] = 1.0
+config["cls_coef"] = 3.0
 config["end_coef"] = 1.0
+config["refinement_reg_coef"] = 0.5
+config["refinement_angle_coef"] = 0.5
 config["test_cls_coef"] = 1.0
 config["test_coef"] = 0.2
 config["test_half_coef"] = 0.1
@@ -86,7 +129,9 @@ config["mgn"] = 0.2
 config["cls_th"] = 2.0
 config["cls_ignore"] = 0.2
 config["use_map"] = False
-### end of config ###
+config["name"] = "non_specified"
+
+#######################################
 
 class Net(nn.Module):
     """
@@ -109,114 +154,246 @@ class Net(nn.Module):
     """
     def __init__(self, config):
         super(Net, self).__init__()
-        self.config = config
-        self.use_map = config["use_map"]
+        self.net_config = config
+        print("Config: ", self.net_config)
+        self.actor_net1 = ActorNet(self.net_config)
+        self.actor_net2 = ActorNet(self.net_config)
+        # social_h_dim = self.net_config["n_actor"]
+        # dim_list =[self.net_config["num_social_features"], social_h_dim//2, social_h_dim]
+        # self.mlp_embedding = make_mlp(dim_list=dim_list,
+        #                               layer_norm=True,
+        #                               dropout=config["apply_dropout"])
+        # self.linear_embedding = LinearEmbedding(self.net_config["num_social_features"],
+        #                                         self.net_config["n_actor"])
+        # self.pos_encoder = PositionalEncoding1D(self.net_config["n_actor"])
+        # self.encoder_transformer = EncoderTransformer(self.net_config)
         
-        self.actor_net1 = ActorNet(config)
-        self.actor_net2 = ActorNet(config)
-        if self.use_map:
-            self.map_net = MapNet(config)
+        if self.net_config["use_map"]:
+            self.map_net = MapNet(self.net_config)
 
-            self.a2a = A2A(config)
-            self.a2m = A2M(config)
-            self.m2m = M2M(config)
-            self.m2a = M2A(config)
+            self.a2m = A2M(self.net_config)
+            self.m2m = M2M(self.net_config)
+            self.m2a = M2A(self.net_config)
+            # self.a2a = A2A(self.net_config)
+            self.agent_gnn = AgentGNN(self.net_config)
             
-            self.test_net = TestNet(config)
-            self.m2a_test = M2A(config)
+            if self.net_config["use_goal_areas"]:
+                self.test_half_net = TestNet_Half(self.net_config)
+                self.m2a_half_test = M2A(self.net_config)
+                
+                self.test_net = TestNet(self.net_config)
+                self.m2a_test = M2A(self.net_config)
+                
+                # self.a2a_test = A2A(self.net_config)     
+                self.agent_gnn_test = AgentGNN(self.net_config)
             
-            self.test_half_net = TestNet_Half(config)
-            self.m2a_half_test = M2A(config)
-            
-            self.a2a_test = A2A(config)     
-            
-            self.pred_net = PredNet(config)      
+                if self.net_config["map_in_decoder"]:
+                    self.pred_net = PredNet(self.net_config)  
+                else:
+                    self.pred_net = PredNetNoMap(self.net_config) 
+            else:
+                self.pred_net = PredNetNoMap(self.net_config)   
         else:
-            self.a2a = A2A(config)
-            self.test_half_net = TestNet_Half(config)
-            self.pred_net = PredNetNoMap(config)
-
+            self.a2a = A2A(self.net_config)
+            self.pred_net = PredNetNoMap(self.net_config)
+    
+    def add_noise(self, input_tensor, factor=1):
+        """_summary_
+        Args:
+            input_tensor (_type_): _description_
+            factor (int, optional): _description_. Defaults to 1.
+        Returns:
+            _type_: _description_
+        """
+        
+        # if self.net_config["align_image_with_target_x"]:
+        #     input_tensor_dim = [int(x) for x in input_tensor.shape]
+        #     dim = (*input_tensor_dim[:-1],1)
+        
+        #     noise_x = factor * torch.randn(dim).to(input_tensor)
+        #     noise_y = factor/2 * torch.randn(dim).to(input_tensor) # Reduce data augmentation in y-axis
+        #     noise = torch.cat([noise_x,noise_y],-1)
+        # else:
+        #     noise = factor * torch.randn(input_tensor.shape).to(input_tensor)
+        noise = factor * torch.randn(input_tensor.shape).to(input_tensor)
+        
+        noisy_input_tensor = input_tensor + noise
+        return noisy_input_tensor
+    
     def forward(self, data: Dict, return_embeddings: bool = False) -> Dict[str, List[Tensor]]:
-        # construct actor feature
+        DEBUG = False
+        if DEBUG: print("----------------")
 
-        actors, actor_idcs = actor_gather(gpu(data["feats"]))
+        start_forward = time.time()
+        
+        # Preprocess data
+        
+        start = time.time()
+        pdb.set_trace()
+        actors, actor_idcs = actor_gather(gpu(data["feats"]),gpu(data["object_types"]))
+        agents_per_sample = [len(idcs) for idcs in actor_idcs]
         actor_ctrs = gpu(data["ctrs"])
+        centers_cat = torch.cat(actor_ctrs, dim=0)
+        rot, orig = gpu(data["rot"]), gpu(data["orig"])
+        
+        if DEBUG: print(f"Time social data extraction: {time.time()-start}")
+        
+        # Construct actor feature
+        
+        start = time.time()
+        
         actors_1 = self.actor_net1(actors, actor_ctrs)
         actors_2 = self.actor_net2(actors, actor_ctrs)
         actors = actors_1 + actors_2
-
-        if self.use_map:
-            # construct map features
+        actors = actors.transpose(1,2)
+        
+        if self.training:
+            actors[:,:,:2] = self.add_noise(actors[:,:,:2], self.net_config["data_aug_gaussian_noise"])
+            centers_cat = self.add_noise(centers_cat, self.net_config["data_aug_gaussian_noise"])
+            
+        # linear_output = self.mlp_embedding(actors)
+        # linear_output = self.linear_embedding(actors)
+        # pos_encoding = self.pos_encoder(linear_output)
+        # pos_encoding = pos_encoding + linear_output
+        
+        # actors = self.encoder_transformer(pos_encoding) # , agents_per_sample) # Deep social features
+        
+        if DEBUG: print(f"Time social data encoder: {time.time()-start}")
+        
+        if self.net_config["use_map"]:
+            
+            # Construct map features
+            
+            start = time.time()
             
             graph = graph_gather(to_long(gpu(data["graph"])))
+            
+            if DEBUG: print(f"Time physical data extraction: {time.time()-start}")
+            
+            start = time.time()
+            
             nodes, node_idcs, node_ctrs = self.map_net(graph)
-
-            # actor-map fusion cycle 
-
-            nodes = self.a2m(nodes, graph, actors, actor_idcs, actor_ctrs) # 8604, 128
+            
+            if DEBUG: print(f"Time physical data encoder: {time.time()-start}")
+            
+            # Actor-map fusion cycle 
+            
+            start = time.time()
+            
+            nodes = self.a2m(nodes, graph, actors, actor_idcs, actor_ctrs) 
             nodes = self.m2m(nodes, graph)
-            actors = self.m2a(actors, actor_idcs, actor_ctrs, nodes, node_idcs, node_ctrs) # 344, 128
-            actors = self.a2a(actors, actor_idcs, actor_ctrs)
-            # list 16: x, 2
-            test_half_ctrs = self.test_half_net(actors, actor_idcs, actor_ctrs)
+            actors = self.m2a(actors, actor_idcs, actor_ctrs, nodes, node_idcs, node_ctrs)
+            # actors = self.a2a(actors, actor_idcs, actor_ctrs)
+            actors = self.agent_gnn(actors, centers_cat, agents_per_sample) # Global interaction
+            actors = torch.cat(actors,0) # Concatenate all relevant agents
             
-            actors = self.m2a_half_test(actors, actor_idcs, test_half_ctrs, nodes, node_idcs, node_ctrs)
-            #actors = self.a2a_test(actors, actor_idcs, test_half_ctrs)
-            test_out = self.test_net(actors, actor_idcs, actor_ctrs, nodes, node_idcs, node_ctrs)
-            test_ctrs = test_out["test_ctrs"]
-            ctrs = [x[:,0] for x in test_ctrs]
-            actors = self.m2a_test(actors, actor_idcs, ctrs, nodes, node_idcs, node_ctrs)   
-            actors = self.a2a_test(actors, actor_idcs, ctrs)
+            if DEBUG: print(f"Time actor-map fusion cycle: {time.time()-start}")
+            
+            if self.net_config["use_goal_areas"]:
+                
+                # Intermediate goal ROI areas
+                
+                start = time.time()
+                
+                test_half_ctrs = self.test_half_net(actors, actor_idcs, actor_ctrs)
+                actors = self.m2a_half_test(actors, actor_idcs, test_half_ctrs, nodes, node_idcs, node_ctrs)
+                # actors = self.a2a_test(actors, actor_idcs, test_half_ctrs)
+                test_out = self.test_net(actors, actor_idcs, actor_ctrs, nodes, node_idcs, node_ctrs)
+                test_ctrs = test_out["test_ctrs"]
+                ctrs = [x[:,0] for x in test_ctrs]
+                actors = self.m2a_test(actors, actor_idcs, ctrs, nodes, node_idcs, node_ctrs)  
+                
+                latent_distill_vector = torch.clone(actors) 
+                
+                # actors = self.a2a_test(actors, actor_idcs, ctrs)
+                actors = self.agent_gnn_test(actors, torch.cat(test_half_ctrs,0), agents_per_sample) # Global interaction
+                actors = torch.cat(actors,0) # Concatenate all relevant agents
+                
+                if DEBUG: print(f"Time ROIs: {time.time()-start}")
 
-            # prediction
-            
-            out, feats = self.pred_net(actors, actor_idcs, actor_ctrs, nodes, node_idcs, node_ctrs)
+                # Prediction
+                
+                if self.net_config["map_in_decoder"]:
+                    
+                    start = time.time()
+                    
+                    out = self.pred_net(actors, actor_idcs, actor_ctrs, nodes, node_idcs, node_ctrs)
+                    
+                    ## Get intermediate goal areas in global coordinates
+                    
+                    out["test_half_ctrs"] = test_half_ctrs
+                    out["test_ctrs"] = test_ctrs
+                    out["test_cls"] = test_out["test_cls"]
+                    
+                    ## Transform prediction to world coordinates
+                    
+                    for i in range(len(test_half_ctrs)):
+                        out["test_half_ctrs"][i] = torch.matmul(test_half_ctrs[i], rot[i]) + orig[i].view(
+                            1, -1
+                        )
+                    
+                    for i in range(len(test_ctrs)):
+                        out["test_ctrs"][i] = torch.matmul(test_ctrs[i], rot[i]) + orig[i].view(
+                            1, 1, -1
+                        )
+                        
+                    if DEBUG: print(f"Time decoder: {time.time()-start}")
+                else:
+                    
+                    # Prediction
+                    
+                    latent_distill_vector = torch.clone(actors) 
+                    out = self.pred_net(actors, actor_idcs, actor_ctrs)
+            else:
+                
+                # Prediction
+
+                latent_distill_vector = torch.clone(actors) 
+                out = self.pred_net(actors, actor_idcs, actor_ctrs)
         else:
-            actors = self.a2a(actors, actor_idcs, actor_ctrs)
-            test_half_ctrs = self.test_half_net(actors, actor_idcs, actor_ctrs)
             
-            # prediction
-
-            out, feats = self.pred_net(actors, actor_idcs, actor_ctrs)
-
-        rot, orig = gpu(data["rot"]), gpu(data["orig"])
+            latent_distill_vector = torch.clone(actors) 
+            actors = self.a2a(actors, actor_idcs, actor_ctrs)
+            
+            # Prediction
+            
+            out = self.pred_net(actors, actor_idcs, actor_ctrs)
         
-        out["test_half_ctrs"] = test_half_ctrs
-        if self.use_map:
-            out["test_ctrs"] = test_ctrs
-            out["test_cls"] = test_out["test_cls"]
-
-        # transform prediction to world coordinates
-        for i in range(len(test_half_ctrs)):
-            out["test_half_ctrs"][i] = torch.matmul(test_half_ctrs[i], rot[i]) + orig[i].view(
-                1, -1
-            )
-        
-        if self.use_map:
-            for i in range(len(test_ctrs)):
-                out["test_ctrs"][i] = torch.matmul(test_ctrs[i], rot[i]) + orig[i].view(
-                    1, 1, -1
-                )
-
+        # Convert multimodal prediction to global coordinates
+                   
         for i in range(len(out["reg"])):
             out["reg"][i] = torch.matmul(out["reg"][i], rot[i]) + orig[i].view(
                 1, 1, 1, -1
             )
-           
+            
+        # Motion Refinement
+        
+        # TODO: Finish this
+        
+        end_forward = time.time()
+        
+        if DEBUG: print(f"1. Forward pass time: ", end_forward-start_forward)
+        
         if return_embeddings:
-            return out, actors, feats # out = multimodal prediction, 
-                                      # actors = latent space before regression
-                                      # feats = latent space before confidences
+            return out, latent_distill_vector
         else:
             return out
 
-def actor_gather(actors: List[Tensor]) -> Tuple[Tensor, List[Tensor]]:
+def actor_gather(actors: List[Tensor], object_types: List[Tensor]) -> Tuple[Tensor, List[Tensor]]:
     batch_size = len(actors)
     num_actors = [len(x) for x in actors]
 
-    actors = [x.transpose(1, 2) for x in actors]
-    actors = torch.cat(actors, 0)
+    actors_ = [x.transpose(1, 2) for x in actors]
+    actors_ = torch.cat(actors_, 0)
 
+    object_types_ = torch.cat(object_types, 0).unsqueeze(2)
+    object_types_ = torch.repeat_interleave(object_types_,actors_.shape[2],dim=2)
+    
+    total_feats_dim = actors_.shape[1] + object_types_.shape[1] # dispX, dispY, mask, type
+    actors = torch.zeros((actors_.shape[0], total_feats_dim, actors_.shape[2])).to(actors_)
+    actors[:,:actors_.shape[1], :] = actors_
+    actors[:,actors_.shape[1]:, :] = object_types_
+    
     actor_idcs = []
     count = 0
     for i in range(batch_size):
@@ -224,7 +401,6 @@ def actor_gather(actors: List[Tensor]) -> Tuple[Tensor, List[Tensor]]:
         actor_idcs.append(idcs)
         count += num_actors[i]
     return actors, actor_idcs
-
 
 def graph_gather(graphs):
     batch_size = len(graphs)
@@ -266,6 +442,118 @@ def graph_gather(graphs):
             graph[k1][k2] = torch.cat(temp)
     return graph
 
+class LinearEmbedding(nn.Module):
+    def __init__(self,input_dim, output_dim):
+        super(LinearEmbedding, self).__init__()
+        self.input_size = input_dim
+        self.output_size = output_dim
+
+        self.encoder_input_layer = nn.Linear(
+                in_features=self.input_size, 
+                out_features=self.output_size 
+                    )
+    def forward(self,linear_input):
+
+        linear_out = F.relu(self.encoder_input_layer(linear_input))
+
+        return linear_out 
+
+def make_mlp(dim_list, activation_function="ReLU", layer_norm=False, dropout=0.0, model_output=False):
+    """
+    Generates MLP network:
+    Parameters
+    ----------
+    dim_list : list, list of number for each layer
+    activation_function: str, activation function for all layers TODO: Different AF for every layer?
+    batch_norm : boolean, use batchnorm at each layer, default: False
+    dropout : float [0, 1], dropout probability applied on each layer (except last layer)
+    Returns
+    -------
+    nn.Sequential with layers
+    """
+    layers = []
+    index = 0
+    for dim_in, dim_out in zip(dim_list[:-1], dim_list[1:]):
+        layers.append(nn.Linear(dim_in, dim_out))
+
+        if layer_norm:
+            layers.append(nn.LayerNorm(dim_out))
+
+        if model_output and (index == len(dim_list) - 1): # Not apply Activation Function for the last
+                                                          # layer if it is the model output
+            pass
+        else:
+            if activation_function == "ReLU":
+                layers.append(nn.ReLU())
+            elif activation_function == "GELU":
+                layers.append(nn.GELU())
+            elif activation_function == "Tanh":
+                layers.append(nn.Tanh())
+            elif activation_function == "LeakyReLU":
+                layers.append(nn.LeakyReLU())
+                
+        if dropout > 0 and index < len(dim_list) - 2:
+            layers.append(nn.Dropout(p=dropout))
+
+        index += 1
+    return nn.Sequential(*layers)
+    
+class PositionalEncoding1D(nn.Module):
+    def __init__(self, latent_dim):
+        """
+        :param channels: The last dimension of the tensor you want to apply pos emb to.
+        """
+        super(PositionalEncoding1D, self).__init__()
+        channels = latent_dim
+        self.org_channels = channels
+        channels = int(np.ceil(channels / 2) * 2)
+        self.channels = channels
+        inv_freq = 1.0 / (10000 ** (torch.arange(0, channels, 2).float() / channels))
+        self.register_buffer("inv_freq", inv_freq)
+        self.cached_penc = None
+
+    def forward(self, tensor):
+        """
+        :param tensor: A 3d tensor of size (batch_size, x, ch)
+        :return: Positional Encoding Matrix of size (batch_size, x, ch)
+        """
+        if len(tensor.shape) != 3:
+            raise RuntimeError("The input tensor has to be 3d!")
+
+        if self.cached_penc is not None and self.cached_penc.shape == tensor.shape:
+            return self.cached_penc
+
+        self.cached_penc = None
+        batch_size, x, orig_ch = tensor.shape
+        pos_x = torch.arange(x, device=tensor.device).type(self.inv_freq.type())
+        sin_inp_x = torch.einsum("i,j->ij", pos_x, self.inv_freq)
+        emb_x = torch.cat((sin_inp_x.sin(), sin_inp_x.cos()), dim=-1)
+        emb = torch.zeros((x, self.channels), device=tensor.device).type(tensor.type())
+        emb[:, : self.channels] = emb_x
+
+        self.cached_penc = emb[None, :, :orig_ch].repeat(batch_size, 1, 1)
+
+        return self.cached_penc
+
+class EncoderTransformer(nn.Module):
+    def __init__(self, args):
+        super(EncoderTransformer, self).__init__()
+        self.args = args
+
+        self.d_model = self.args["n_actor"] # embedding dimension
+        self.nhead = self.args["num_attention_heads"] # self.args["n_actor"]
+        self.d_hid = 1 ## dimension of the feedforward network model in nn.TransformerEncoder
+        self.num_layers = 1
+        self.dropout = self.args["apply_dropout"]
+
+        self.encoder_layer = nn.TransformerEncoderLayer(self.d_model, self.nhead, self.d_hid , self.dropout, batch_first=True)
+        self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=self.num_layers)
+
+    def forward(self, transformer_in):#, agents_per_sample):
+
+        transformer_out = F.relu(self.transformer_encoder(transformer_in))
+        return transformer_out[:,-1,:]
+    
 class ActorNet(nn.Module):
     """
     Actor feature extractor with Conv1D
@@ -273,11 +561,13 @@ class ActorNet(nn.Module):
     def __init__(self, config):
         super(ActorNet, self).__init__()
         self.config = config
+
         norm = "GN"
         ng = 1
 
         n_in = 3
-        n_out = [32, 32, 64, 128]
+        # n_out = [32, 32, 64, 128]
+        n_out = [32, 32, 64, self.config["n_actor"]]
         blocks = [no_pad_Res1d, Res1d, Res1d, Res1d]
         num_blocks = [1, 2, 2, 2]
 
@@ -295,7 +585,7 @@ class ActorNet(nn.Module):
             n_in = n_out[i]
         self.groups = nn.ModuleList(groups)
 
-        n = config["n_actor"]
+        n = self.config["n_actor"]
         lateral = []
         for i in range(len(n_out)):
             lateral.append(Conv1d(n_out[i], n, norm=norm, ng=ng, act=False))
@@ -325,13 +615,14 @@ class ActorNet(nn.Module):
         out_init = out[:, :, -1]
         
         #1. TODO fuse map data as init hidden and cell state
-        h0 = self.lstm_h0_init_function(actor_ctrs).view(1, M, config["n_actor"])
-        c0 = self.lstm_h0_init_function(actor_ctrs).view(1, M, config["n_actor"])
-        #h0 = torch.zeros(1, M, config["n_actor"]).cuda()
-        #c0 = torch.zeros(1, M, config["n_actor"]).cuda()
+
+        h0 = self.lstm_h0_init_function(actor_ctrs).view(1, M, self.config["n_actor"])
+        c0 = self.lstm_h0_init_function(actor_ctrs).view(1, M, self.config["n_actor"])
+        #h0 = torch.zeros(1, M, self.config["n_actor"]).cuda()
+        #c0 = torch.zeros(1, M, self.config["n_actor"]).cuda()
         out = out.transpose(1, 2).contiguous()
         output, (hn, cn) = self.lstm_encoder(out, (h0, c0))
-        out_lstm = hn.contiguous().view(M, config["n_actor"])
+        out_lstm = hn.contiguous().view(M, self.config["n_actor"])
         out = out_lstm + out_init
         return out
 
@@ -342,7 +633,7 @@ class MapNet(nn.Module):
     def __init__(self, config):
         super(MapNet, self).__init__()
         self.config = config
-        n_map = config["n_map"]
+        n_map = self.config["n_map"]
         norm = "GN"
         ng = 1
 
@@ -358,7 +649,7 @@ class MapNet(nn.Module):
         )
 
         keys = ["ctr", "norm", "ctr2", "left", "right"]
-        for i in range(config["num_scales"]):
+        for i in range(self.config["num_scales"]):
             keys.append("pre" + str(i))
             keys.append("suc" + str(i))
 
@@ -367,6 +658,7 @@ class MapNet(nn.Module):
             fuse[key] = []
 
         for i in range(4):
+        # for i in range(2):
             for key in fuse:
                 if key in ["norm"]:
                     fuse[key].append(nn.GroupNorm(gcd(ng, n_map), n_map))
@@ -442,7 +734,7 @@ class A2M(nn.Module):
     def __init__(self, config):
         super(A2M, self).__init__()
         self.config = config
-        n_map = config["n_map"]
+        n_map = self.config["n_map"]
         norm = "GN"
         ng = 1
 
@@ -450,7 +742,7 @@ class A2M(nn.Module):
         self.meta = Linear(n_map + 11, n_map, norm=norm, ng=ng)
         att = []
         for i in range(2):
-            att.append(Att(n_map, config["n_actor"]))
+            att.append(Att(n_map, self.config["n_actor"]))
         self.att = nn.ModuleList(att)
 
     def forward(self, feat: Tensor, graph: Dict[str, Union[List[Tensor], Tensor, List[Dict[str, Tensor]], Dict[str, Tensor]]], actors: Tensor, actor_idcs: List[Tensor], actor_ctrs: List[Tensor]) -> Tensor:
@@ -464,6 +756,7 @@ class A2M(nn.Module):
             ),
             1,
         )
+        
         feat = self.meta(torch.cat((feat, meta), 1))
 
         for i in range(len(self.att)):
@@ -486,12 +779,12 @@ class M2M(nn.Module):
     def __init__(self, config):
         super(M2M, self).__init__()
         self.config = config
-        n_map = config["n_map"]
+        n_map = self.config["n_map"]
         norm = "GN"
         ng = 1
 
         keys = ["ctr", "norm", "ctr2", "left", "right"]
-        for i in range(config["num_scales"]):
+        for i in range(self.config["num_scales"]):
             keys.append("pre" + str(i))
             keys.append("suc" + str(i))
 
@@ -500,6 +793,7 @@ class M2M(nn.Module):
             fuse[key] = []
 
         for i in range(4):
+        # for i in range(2):
             for key in fuse:
                 if key in ["norm"]:
                     fuse[key].append(nn.GroupNorm(gcd(ng, n_map), n_map))
@@ -561,8 +855,8 @@ class M2A(nn.Module):
         norm = "GN"
         ng = 1
 
-        n_actor = config["n_actor"]
-        n_map = config["n_map"]
+        n_actor = self.config["n_actor"]
+        n_map = self.config["n_map"]
 
         att = []
         for i in range(2):
@@ -592,8 +886,8 @@ class A2A(nn.Module):
         norm = "GN"
         ng = 1
 
-        n_actor = config["n_actor"]
-        n_map = config["n_map"]
+        n_actor = self.config["n_actor"]
+        n_map = self.config["n_map"]
 
         att = []
         for i in range(2):
@@ -648,7 +942,7 @@ class TestNet_Half(nn.Module):
         self.config = config
         norm = "GN"
         ng = 1
-        n_actor = config["n_actor"]
+        n_actor = self.config["n_actor"]
         self.test = nn.Sequential(
                     LinearRes(n_actor, n_actor, norm=norm, ng=ng),
                     nn.Linear(n_actor, 2))
@@ -675,9 +969,9 @@ class TestNet(nn.Module):
         self.config = config
         norm = "GN"
         ng = 1
-        n_actor = config["n_actor"]
+        n_actor = self.config["n_actor"]
         pred = []
-        for i in range(config["num_test_mod"]):
+        for i in range(self.config["num_test_mod"]):
             pred.append(
                 nn.Sequential(
                     LinearRes(n_actor, n_actor, norm=norm, ng=ng),
@@ -685,9 +979,10 @@ class TestNet(nn.Module):
                 )
             )
         self.pred = nn.ModuleList(pred)
-        self.att_dest = myAttDest(n_actor, config["num_test_mod"])
+        self.att_dest = myAttDest(n_actor, self.config["num_test_mod"], config)
         self.cls = nn.Sequential(
-            LinearRes(n_actor, n_actor, norm=norm, ng=ng), nn.Linear(n_actor, 1)
+            LinearRes(n_actor, n_actor, norm=norm, ng=ng), 
+            nn.Linear(n_actor, 1)
         )
         self.softmax = nn.Softmax(dim=1)
         
@@ -733,26 +1028,25 @@ class PredNet(nn.Module):
         norm = "GN"
         ng = 1
 
-        n_actor = config["n_actor"]
+        n_actor = self.config["n_actor"]
 
         pred = []
-        for i in range(config["num_mods"]):
+        for i in range(self.config["num_mods"]):
             pred.append(
                 nn.Sequential(
                     LinearRes(n_actor, n_actor, norm=norm, ng=ng),
-                    nn.Linear(n_actor, 2 * config["num_preds"]),
+                    nn.Linear(n_actor, 2 * self.config["num_preds"]),
                 )
             )
         self.pred = nn.ModuleList(pred)
 
-        self.att_dest = myAttDest(n_actor, config["num_mods"])
+        self.att_dest = myAttDest(n_actor, self.config["num_mods"], config)
         self.cls = nn.Sequential(
             LinearRes(n_actor, n_actor, norm=norm, ng=ng), nn.Linear(n_actor, 1)
         )
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, actors: Tensor, actor_idcs: List[Tensor], actor_ctrs: List[Tensor], nodes, node_idcs, node_ctrs) -> Dict[str, List[Tensor]]:
-        # pdb.set_trace()
         preds = []
         for i in range(len(self.pred)):
             preds.append(self.pred[i](actors))
@@ -765,7 +1059,6 @@ class PredNet(nn.Module):
             reg[idcs] = reg[idcs] + ctrs
 
         dest_ctrs = reg[:, :, -1].detach()
-        # pdb.set_trace()
         feats = self.att_dest(actors, torch.cat(actor_ctrs, 0), dest_ctrs, actor_idcs, nodes, node_idcs, node_ctrs) # 2064, 128
         cls = self.cls(feats).view(-1, self.config["num_mods"])
         cls = self.softmax(cls)
@@ -777,13 +1070,16 @@ class PredNet(nn.Module):
         reg = reg[row_idcs, sort_idcs].view(cls.size(0), cls.size(1), -1, 2)
 
         out = dict()
-        out["cls"], out["reg"], out["test_ctrs"], out["test_cls"] = [], [], [], []
+        out["cls"], out["reg"], out["reg_normalized"], out["test_ctrs"], out["test_cls"], out["latent_actors"] = [], [], [], [], [], []
         for i in range(len(actor_idcs)):
             idcs = actor_idcs[i]
             ctrs = actor_ctrs[i].view(-1, 1, 1, 2)
-            out["cls"].append(cls[idcs])
+            out["latent_actors"].append(actors[idcs])
             out["reg"].append(reg[idcs])
-        return out, feats
+            out["reg_normalized"].append(reg[idcs]) # Auxiliar, do not use this key to compute regression loss with the GT
+            out["cls"].append(cls[idcs])
+        
+        return out
 
 class PredNetNoMap(nn.Module):
     """
@@ -796,19 +1092,19 @@ class PredNetNoMap(nn.Module):
         norm = "GN"
         ng = 1
 
-        n_actor = config["n_actor"]
+        n_actor = self.config["n_actor"]
 
         pred = []
-        for i in range(config["num_mods"]):
+        for i in range(self.config["num_mods"]):
             pred.append(
                 nn.Sequential(
                     LinearRes(n_actor, n_actor, norm=norm, ng=ng),
-                    nn.Linear(n_actor, 2 * config["num_preds"]),
+                    nn.Linear(n_actor, 2 * self.config["num_preds"]),
                 )
             )
         self.pred = nn.ModuleList(pred)
 
-        self.att_dest = myAttDestNoMap(n_actor, config["num_mods"])
+        self.att_dest = myAttDestNoMap(n_actor, self.config["num_mods"])
         self.cls = nn.Sequential(
             LinearRes(n_actor, n_actor, norm=norm, ng=ng), nn.Linear(n_actor, 1)
         )
@@ -827,7 +1123,7 @@ class PredNetNoMap(nn.Module):
             reg[idcs] = reg[idcs] + ctrs
 
         dest_ctrs = reg[:, :, -1].detach()
-        feats = self.att_dest(actors, torch.cat(actor_ctrs, 0), dest_ctrs, actor_idcs) ## embedding para distill
+        feats = self.att_dest(actors, torch.cat(actor_ctrs, 0), dest_ctrs, actor_idcs) 
         cls = self.cls(feats).view(-1, self.config["num_mods"])
         cls = self.softmax(cls)
         
@@ -844,7 +1140,7 @@ class PredNetNoMap(nn.Module):
             ctrs = actor_ctrs[i].view(-1, 1, 1, 2)
             out["cls"].append(cls[idcs])
             out["reg"].append(reg[idcs])
-        return out, feats
+        return out
 
 class Att(nn.Module):
     """
@@ -951,7 +1247,7 @@ class AttDest(nn.Module):
         return agts
 
 class myAttDest(nn.Module):
-    def __init__(self, n_agt: int, K):
+    def __init__(self, n_agt: int, K, config):
         super(myAttDest, self).__init__()
         norm = "GN"
         ng = 1
@@ -979,7 +1275,7 @@ class myAttDest(nn.Module):
             dist = (agt_ctrs - dest_ctr).view(-1, 2)
             dist = self.dist(dist)
             ctr = [x[:,k,:] for x in ctrs]
-            # pdb.set_trace()
+
             actors = self.m2a_dest(agts, actor_idcs, ctr, nodes, node_idcs, node_ctrs)   # aplicar linear (?)
             actors = torch.cat((dist, actors), 1)
             actors = self.agt(actors)
@@ -1006,7 +1302,6 @@ class myAttDestNoMap(nn.Module):
         self.agt = Linear(2 * n_agt, n_agt, norm=norm, ng=ng)
         self.K = K
         #self.K_agt = Linear(self.K * n_agt, n_agt, norm=norm, ng=ng)
-        self.m2a_dest = M2A(config)
 
     def forward(self, agts: Tensor, agt_ctrs: Tensor, dest_ctrs: Tensor, actor_idcs) -> Tensor:
         n_agt = agts.size(1)
@@ -1038,59 +1333,101 @@ class PredLoss(nn.Module):
         super(PredLoss, self).__init__()
         self.config = config
         self.reg_loss = nn.SmoothL1Loss(reduction="sum")
+        self.motion_refinement = Motion_Refinement(self.config)
 
-    def forward(self, out: Dict[str, List[Tensor]], gt_preds: List[Tensor], has_preds: List[Tensor]) -> Dict[str, Union[Tensor, int]]:
-        cls, reg, test_ctrs, test_half_ctrs, test_cls = out["cls"], out["reg"], out["test_ctrs"], out["test_half_ctrs"], out["test_cls"]
+    def forward(self, out: Dict[str, List[Tensor]], 
+                      gt_preds: List[Tensor], 
+                      has_preds: List[Tensor], 
+                      feats_obs: List[Tensor],
+                      object_types: List[Tensor],
+                      rot: List[Tensor],
+                      orig: List[Tensor]) -> Dict[str, Union[Tensor, int]]:
+
+        cls, reg, reg_normalized = out["cls"], out["reg"], out["reg_normalized"]
+        latent_actors = out["latent_actors"]
+        test_ctrs, test_half_ctrs, test_cls = out["test_ctrs"], out["test_half_ctrs"], out["test_cls"]
+        
         cls = torch.cat([x for x in cls], 0)
         test_cls = torch.cat([x for x in test_cls], 0)
         reg = torch.cat([x for x in reg], 0)
+        reg_normalized = torch.cat([x for x in reg_normalized], 0)
+        
         test_ctrs = torch.cat([x for x in test_ctrs], 0)
         test_half_ctrs = torch.cat([x for x in test_half_ctrs], 0)
         
-        gt_preds = torch.cat([x for x in gt_preds], 0)
-        has_preds = torch.cat([x for x in has_preds], 0)
+        # Transform GT to local normalized coordinates
+                
+        aux_gt_rel = []
+        for i in range(len(gt_preds)):
+            aux_gt_rel.append(torch.matmul(gt_preds[i] - orig[i].view(1, 1, -1), 
+                                           torch.inverse(rot[i])))
 
+        gt_preds = torch.cat([x for x in gt_preds], 0)
+        aux_gt_rel = torch.cat([x for x in aux_gt_rel], 0)
+        has_preds = torch.cat([x for x in has_preds], 0)
+        feats_obs = torch.cat([x for x in feats_obs], 0)
+        latent_actors = torch.cat([x for x in latent_actors],0)
+        object_types = torch.cat([x for x in object_types], 0)
+        rot = torch.cat([x for x in rot], 0)
+        orig = torch.cat([x for x in orig], 0)
+        
         loss_out = dict()
         zero = 0.0 * (cls.sum() + test_cls.sum()+ reg.sum() + test_ctrs.sum()+ test_half_ctrs.sum())
-        loss_out["cls_loss"] = zero.clone()
-        loss_out["test_cls_loss"] = zero.clone()
-        loss_out["num_cls"] = 0
-        loss_out["num_test_cls"] = 0
+        
         loss_out["reg_loss"] = zero.clone()
         loss_out["num_reg"] = 0
+        loss_out["end_loss"] = zero.clone()
+        loss_out["num_end"] = 0
+        loss_out["cls_loss"] = zero.clone()
+        loss_out["num_cls"] = 0
+        
+        # loss_out["refinement_loss"] = zero.clone()
+        loss_out["angle_loss"] = zero.clone()
+        # The number of agents is the same than loss_out["num_reg"] since
+        # we are comparing the updated prediction (angle and trajectory) against GT
+        
+        loss_out["test_cls_loss"] = zero.clone()
+        loss_out["num_test_cls"] = 0
         loss_out["test_loss"] = zero.clone()
         loss_out["test_half_loss"] = zero.clone()
         loss_out["num_test"] = 0   
-        loss_out["end_loss"] = zero.clone()
-        loss_out["num_end"] = 0
         
         num_mods, num_preds = self.config["num_mods"], self.config["num_preds"]
         # assert(has_preds.all())
 
-        last = has_preds.float() + 0.1 * torch.arange(num_preds).float().to(
-            has_preds.device
-        ) / float(num_preds)
+        last = has_preds.float() + 0.1 * torch.arange(num_preds).float().to(has_preds.device) / float(num_preds)
+        
+        # Filter obstacles with the current mask. Take those agents which have at least one pred in the future 
+        
         max_last, last_idcs = last.max(1)
         mask = max_last > 1.0
-        cls = cls[mask]    
+        cls = cls[mask]   
         test_cls = test_cls[mask]
         reg = reg[mask]
+        reg_normalized = reg_normalized[mask]
+        
+        feats_obs = feats_obs[mask]
+        latent_actors = latent_actors[mask]
+        object_types = object_types[mask]
+        
         test_ctrs = test_ctrs[mask]
         test_half_ctrs = test_half_ctrs[mask]
         gt_preds = gt_preds[mask]
+        aux_gt_rel = aux_gt_rel[mask]
         has_preds = has_preds[mask]
         last_idcs = last_idcs[mask]
         
         half_idcs = torch.floor(torch.div(last_idcs, 2)).long()
-        
         row_idcs = torch.arange(len(last_idcs)).long().to(last_idcs.device)
+        
+        # Standard regression (ADE and FDE) and classification losses
+        
         dist = []
         for j in range(num_mods):
             dist.append(
                 torch.sqrt(
                     (
-                        (reg[row_idcs, j, last_idcs] - gt_preds[row_idcs, last_idcs])
-                        ** 2
+                        (reg[row_idcs, j, last_idcs] - gt_preds[row_idcs, last_idcs]) ** 2
                     ).sum(1)
                 )
             )
@@ -1112,13 +1449,37 @@ class PredLoss(nn.Module):
         loss_out["num_cls"] += mask.sum().item()
 
         reg = reg[row_idcs, min_idcs]
+        reg_normalized = reg_normalized[row_idcs, min_idcs]
         coef = self.config["reg_coef"]
+
         loss_out["reg_loss"] += coef * (self.reg_loss(reg[has_preds], gt_preds[has_preds]))
         loss_out["num_reg"] += has_preds.sum().item()
         
         coef = self.config["end_coef"]
         loss_out["end_loss"] += coef * (self.reg_loss(reg[row_idcs, last_idcs], gt_preds[row_idcs, last_idcs]))
         loss_out["num_end"] += len(reg)
+        
+        # # Motion Refinement losses (angle and delta)
+
+        # feats_obs_abs = torch.clone(feats_obs)
+        # feats_obs_abs[:,:,:2] = torch.cumsum(feats_obs,dim=1)[:,:,:2] # agents x obs_len x 2
+        # obs_len = feats_obs_abs.shape[1]
+        # pred_len = reg_normalized.shape[1]
+        # data_dim = 2
+        # full_dim = data_dim + object_types.shape[1] # 2 (xy) + 3 (object_type)
+        # full_traj = torch.zeros((reg_normalized.shape[0],reg_normalized.shape[1]+feats_obs.shape[1],full_dim)).to(reg_normalized)
+        # full_traj[:,:obs_len,:data_dim] = feats_obs_abs[:,:,:data_dim] # only x and y
+        # full_traj[:,obs_len:,:data_dim] = reg_normalized # only x and y
+        # full_traj[:,:,data_dim:] = object_types.unsqueeze(1) # agents x full_len x full_dim
+
+        # loc_delta = self.motion_refinement(full_traj,latent_actors)
+
+        # loss_out["refinement_loss"] += self.config["refinement_reg_coef"] * (self.reg_loss(loc_delta[has_preds], aux_gt_rel[has_preds]))
+        
+        # # TODO: Finish this angle loss
+        # get_angle_diff(aux_gt_rel[has_preds], loc_delta[has_preds], feats_obs_abs[:,:,:data_dim])
+        
+        # Goal ROIs losses
         
         row_idcs = torch.arange(len(last_idcs)).long().to(last_idcs.device)
         dist = []
@@ -1154,7 +1515,8 @@ class PredLoss(nn.Module):
         
         coef = self.config["test_half_coef"]
         loss_out["test_half_loss"] += coef * self.reg_loss(test_half_ctrs[row_idcs], gt_preds[row_idcs, half_idcs])  
-        loss_out["num_test"] += len(min_idcs)        
+        loss_out["num_test"] += len(min_idcs)   
+        
         return loss_out
 
 class Loss(nn.Module):
@@ -1164,10 +1526,15 @@ class Loss(nn.Module):
         self.pred_loss = PredLoss(config)
 
     def forward(self, out: Dict, data: Dict) -> Dict:
-        pdb.set_trace()
-        loss_out = self.pred_loss(out, gpu(data["gt_preds"]), gpu(data["has_preds"]))
+        loss_out = self.pred_loss(out, 
+                                  gpu(data["gt_preds"]), 
+                                  gpu(data["has_preds"]), 
+                                  gpu(data["feats"]), 
+                                  gpu(data["object_types"]),
+                                  gpu(data["rot"]),
+                                  gpu(data["orig"]))
         loss_out["loss"] = loss_out["cls_loss"] / (
-            loss_out["num_cls"] + 1e-10
+                           loss_out["num_cls"] + 1e-10
         ) + loss_out["reg_loss"] / (
             loss_out["num_reg"] + 1e-10
         ) + loss_out["end_loss"] / (
@@ -1178,7 +1545,11 @@ class Loss(nn.Module):
             loss_out["num_test_cls"] + 1e-10
         ) + loss_out["test_half_loss"] / (
             loss_out["num_test"] + 1e-10
-        )
+        ) #+ loss_out["refinement_loss"] / (
+          #  loss_out["num_reg"] + 1e-10
+        #)
+        # TODO: Angle diff
+
         return loss_out
 
 ## Loss original LaneGCN (only regression and confidences)
@@ -1307,8 +1678,8 @@ class PostProcess(nn.Module):
             print("Epoch %3.3f, lr %.5f, time %3.2f" % (epoch, lr, dt))
         else:
             print(
-                "************************* Validation, time %3.2f *************************"
-                % dt
+                "************************* Validation, Epoch %3.3f, time %3.2f *************************"
+                % (epoch, dt)
             )
 
         cls = metrics["cls_loss"] / (metrics["num_cls"] + 1e-10)
@@ -1366,7 +1737,7 @@ class PostProcessLaneGCN(nn.Module):
             metrics[key] += post_out[key]
         return metrics
 
-    def display(self, metrics, dt, epoch, lr=None):
+    def display(self, metrics, dt, epoch, lr=None, distill=False):
         """Every display-iters print training/val information"""
         if lr is not None:
             print("Epoch %3.3f, lr %.5f, time %3.2f" % (epoch, lr, dt))
@@ -1376,9 +1747,14 @@ class PostProcessLaneGCN(nn.Module):
                 % dt
             )
 
-        cls = metrics["cls_loss"] / (metrics["num_cls"] + 1e-10)
-        reg = metrics["reg_loss"] / (metrics["num_reg"] + 1e-10)
-        loss = cls + reg
+        cls_loss = metrics["cls_loss"] / (metrics["num_cls"] + 1e-10)
+        reg_loss = metrics["reg_loss"] / (metrics["num_reg"] + 1e-10)
+
+        if distill:
+            distill_loss = metrics["distill_loss"]  / (metrics["num_reg"] + 1e-10)
+            loss = cls_loss + reg_loss + distill_loss
+        else:
+            loss = cls_loss + reg_loss
 
         # preds = np.concatenate(metrics["preds"], 0)
         # gt_preds = np.concatenate(metrics["gt_preds"], 0)
@@ -1398,10 +1774,16 @@ class PostProcessLaneGCN(nn.Module):
         #has_preds = np.concatenate(metrics["has_preds"], 0)
         ade1, fde1, ade, fde, brier_fde, min_idcs = pred_metrics(preds, gt_preds, has_preds, preds_cls)
 
-        print(
-            "loss %2.4f %2.4f %2.4f, ade1 %2.4f, fde1 %2.4f, ade %2.4f, fde %2.4f, brier_fde %2.4f"
-            % (loss, cls, reg, ade1, fde1, ade, fde, brier_fde)
-        )
+        if distill:
+            print(
+                "loss_total %2.4f distill_loss %2.4f cls_loss %2.4f reg_loss %2.4f, ade1 %2.4f, fde1 %2.4f, ade %2.4f, fde %2.4f, brier_fde %2.4f"
+                % (loss, distill_loss, cls_loss, reg_loss, ade1, fde1, ade, fde, brier_fde)
+            )
+        else:
+            print(
+                "loss_total %2.4f cls_loss %2.4f reg_loss %2.4f, ade1 %2.4f, fde1 %2.4f, ade %2.4f, fde %2.4f, brier_fde %2.4f"
+                % (loss, cls_loss, reg_loss, ade1, fde1, ade, fde, brier_fde)
+            )
         print()
         
 def pred_metrics(preds, gt_preds, has_preds, preds_cls):
@@ -1433,6 +1815,144 @@ def pred_metrics(preds, gt_preds, has_preds, preds_cls):
     brier_fde = (err[row_idcs_last, last_idcs] + (one_arr-cls)**2).mean()
     
     return ade1, fde1, ade, fde, brier_fde, min_idcs
+            
+class AgentGNN(nn.Module):
+    def __init__(self, args):
+        super(AgentGNN, self).__init__()
+        self.args = args
+        
+        # if self.args.training_type == "single-agent":
+        #     self.latent_size = args.social_latent_size # Message-Passing only including social info
+        # elif self.args.training_type == "multi-agent":
+        #     self.latent_size = args.decoder_latent_size # Message-Passing including social and map info
+        self.latent_size = args["n_actor"]
+        
+        self.gcn1 = conv.CGConv(self.latent_size, dim=2, batch_norm=True)
+        self.gcn2 = conv.CGConv(self.latent_size, dim=2, batch_norm=True)
+
+    def forward(self, gnn_in, centers, agents_per_sample):
+        # gnn_in is a batch and has the shape (batch_size, number_of_agents, latent_size)
+
+        x, edge_index = gnn_in, self.build_fully_connected_edge_idx(
+            agents_per_sample).to(gnn_in.device)
+        edge_attr = self.build_edge_attr(edge_index, centers).to(gnn_in.device)
+
+        x = F.relu(self.gcn1(x, edge_index, edge_attr))
+        gnn_out = F.relu(self.gcn2(x, edge_index, edge_attr))
+
+        edge_index_out1 = []
+        for i in agents_per_sample:
+            edge_index_out1.append(gnn_out[0:i,:])
+            gnn_out = gnn_out[i:,:]
+
+        return edge_index_out1
+
+    def build_fully_connected_edge_idx(self, agents_per_sample):
+        edge_index = []
+
+        # In the for loop one subgraph is built (no self edges!)
+        # The subgraph gets offsetted and the full graph over all samples in the batch
+        # gets appended with the offsetted subgrah
+        offset = 0
+        for i in range(len(agents_per_sample)):
+
+            num_nodes = agents_per_sample[i]
+
+            adj_matrix = torch.ones((num_nodes, num_nodes))
+            adj_matrix = adj_matrix.fill_diagonal_(0)
+
+            sparse_matrix = sparse.csr_matrix(adj_matrix.numpy())
+            edge_index_subgraph, _ = from_scipy_sparse_matrix(sparse_matrix)
+
+            # Offset the list
+            edge_index_subgraph = torch.Tensor(
+                np.asarray(edge_index_subgraph) + offset)
+            offset += agents_per_sample[i]
+
+            edge_index.append(edge_index_subgraph)
+
+        # Concat the single subgraphs into one
+        edge_index = torch.LongTensor(np.column_stack(edge_index))
+        
+        return edge_index
+    def build_edge_attr(self, edge_index, data):
+        edge_attr = torch.zeros((edge_index.shape[-1], 2), dtype=torch.float)
+
+        rows, cols = edge_index
+        # goal - origin
+        edge_attr = data[cols] - data[rows]
+
+        return edge_attr
+
+def get_angle_diff(gt_traj, pred_traj, past_traj):
+    """_summary_
+
+    Args:
+        gt_traj (_type_): _description_
+        pred_traj (_type_): _description_
+        past_traj (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
+    
+    pdb.set_trace()
+ 
+    gt_traj_angle = gt_traj[:,:,:] - past_traj[0, :, -1, :].unsqueeze(1) # [B, T, 2]
+    pred_traj_angle = pred_traj[:,:,:] - past_traj[0, :, -1, :].unsqueeze(1) # [B, T, 2]
+    angle_label = torch.atan2(gt_traj_angle[:, :, 1], gt_traj_angle[:, :, 0]).to(torch.float32) #[B, T]
+    angle_pred = torch.atan2(pred_traj_angle[:, :, 1], pred_traj_angle[:, :, 0]).to(torch.float32) #[B, T]
+    angle_diff = angle_label - angle_pred
+    angle_loss = -1 * torch.cos(angle_diff).mean(dim=-1)
+    return angle_loss
+
+class Motion_Refinement(nn.Module):
+    def __init__(self,config):    
+        super(Motion_Refinement, self).__init__()       
+        self.config = config    
+        self.hidden_size = self.config["n_actor"]
+        
+        # social_h_dim = self.config["n_actor"]
+        # dim_list =[self.config["num_social_features_refinement"], social_h_dim//2, social_h_dim]
+        # self.mlp_embedding = make_mlp(dim_list=dim_list,
+        #                               layer_norm=True,
+        #                               dropout=config["apply_dropout"])
+        self.linear_embedding = LinearEmbedding(self.config["num_social_features_refinement"],self.hidden_size)
+        self.pos_encoder = PositionalEncoding1D(self.config["n_actor"])
+        self.encoder_transformer = EncoderTransformer(self.config)
+        
+        self.loc_delta = nn.Sequential(
+                nn.Linear(self.hidden_size*2, self.hidden_size),
+                nn.LayerNorm(self.hidden_size),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.hidden_size, self.hidden_size),
+                nn.LayerNorm(self.hidden_size),
+                nn.ReLU(inplace=True),
+                nn.Linear(self.hidden_size, 2 * self.config["num_preds"]))
+        
+    def forward(self, full_traj, actors_latent):
+        """
+        two stage motion refinement module like faster rcnn and cascade rcnn
+        parameters: 
+            full_traj (GT + pred in R2 and relative coordinates): agents x pred_len x 5 (data_dim + meta_dim)
+            actors_latent (latent vector of agents after fusion cycle + ROIs): agents x latent_dim
+        """        
+
+        num_agents = full_traj.shape[0]
+        
+        # full_traj_embed = self.mlp_embedding(full_traj)
+        full_traj_embed = self.linear_embedding(full_traj)
+        pos_encoding = self.pos_encoder(full_traj_embed)
+        pos_encoding = pos_encoding + full_traj_embed
+        
+        full_traj_latent = self.encoder_transformer(pos_encoding)
+
+        loc_delta = self.loc_delta(torch.cat((actors_latent, # Latent output of the first stage: agents x latent_dim
+                                              full_traj_latent), dim=-1)) # Latent output of the second stage: agents x latent_dim
+        
+        loc_delta = loc_delta.view(num_agents, self.config["num_preds"], 2)  # agents x pred_len x 2
+
+        return loc_delta
 
 def get_model(exp_name, distill=False, use_map=False, use_goal_areas=False, map_in_decoder=False):
     """_summary_
