@@ -74,7 +74,7 @@ parser.add_argument(
 parser.add_argument("--eval", action="store_true")
 
 parser.add_argument(
-    "--weight", default="/home/robesafe/argo2goalmp/saved_models/results_student/50.000.ckpt", type=str, metavar="WEIGHT", help="checkpoint path"
+    "--weight", default="/home/robesafe/argo2goalmp/stable_ckpts/results_student/50.000.ckpt", type=str, metavar="WEIGHT", help="checkpoint path"
 )
 parser.add_argument(
     "--exp_name", default="results_student", type=str)
