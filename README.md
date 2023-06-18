@@ -29,7 +29,7 @@ Our papers:
 
 ## Model
 
-<img src="system_pipeline.pdf"/>
+<img src="system_pipeline.PNG"/>
 
 <!--
 ## MFTF Model 
