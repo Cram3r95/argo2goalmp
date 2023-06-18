@@ -25,12 +25,11 @@ This is the official repository and PyTorch implementations of different works p
 Our papers:
 - [Improving Multi-Agent Motion Prediction With Heuristic Goals and Motion Refinement](https://openaccess.thecvf.com/content/CVPR2023W/AICity/html/Conde_Improving_Multi-Agent_Motion_Prediction_With_Heuristic_Goals_and_Motion_Refinement_CVPRW_2023_paper.html) at CVPR 2023 workshop
 
-<img src="media/t-its-pipeline.jpg"/>
-
 >Motion Prediction (MP) of multiple surrounding agents in physical environments, and accurate trajectory forecasting, is a crucial task for Autonomous Driving Stacks (ADS) and robots. Current methods for MP use end-to-end pipelines, where the input data is usually a HD map and the past trajectories of the most relevant agents; leveraging this information is a must to obtain optimal performance. In that sense, a reliable Autonomous Driving (AD) system must produce fast and accurate predictions to ensure traffic safety. In this work, we tackle Multi-Agent Motion Prediction using an end-to-end pipeline that combines Deep Learning (DL) and heuristic scene understanding. Our model uses as input the map of the scene, the past trajectories of the agents, and additional information about the scene geometry and agents e.g., type of agent, lane distribution. We design our model using powerful attention mechanisms with GNNs to enhance agents interactions, heuristic proposals as preliminary plausible information and a motion refinement module to further improve temporal consistency. We achieve SOTA results on the Argoverse 2 Motion Forecasting Benchmark reducing in millions of parameters previous methods such as GANet, and improving over LaneGCN. Our code is available at https://github.com/Cram3r95/argo2goalmp. 
 
-## Model 
-<img src="media/system_pipeline.pdf"/>
+## Model
+
+<img src="system_pipeline.pdf"/>
 
 <!--
 ## MFTF Model 
