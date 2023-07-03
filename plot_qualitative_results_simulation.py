@@ -14,6 +14,7 @@ import pandas as pd
 import git
 import os
 import argparse
+import time
 
 from typing import Tuple, Optional, List, Set
 from importlib import import_module
@@ -34,7 +35,7 @@ from PIL import Image
 
 # Custom imports
 
-repo = git.Repo('.', search_parent_directories=True)
+repo = git.Repo(__file__, search_parent_directories=True)
 BASE_DIR = repo.working_tree_dir
 sys.path.append(BASE_DIR)
 
@@ -60,11 +61,14 @@ OBS_LEN = 50
 
 _PlotBounds = Tuple[float, float, float, float]
 
-RELATIVE_ROUTE = "smarts_simulator_scenarios/scenario_poses_v1"
+RELATIVE_ROUTE = "poses"
 SCENARIO_ROUTE = os.path.join(BASE_DIR,RELATIVE_ROUTE)
 ADDITIONAL_STRING = "poses_"
 
-SAVE_DIR = os.path.join(BASE_DIR,RELATIVE_ROUTE+"_plots")
+if PREDICT_AGENTS:
+    SAVE_DIR = os.path.join(BASE_DIR,RELATIVE_ROUTE+"_with_predictions_plots")
+else:
+    SAVE_DIR = os.path.join(BASE_DIR,RELATIVE_ROUTE+"_plots") 
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 parser = argparse.ArgumentParser(description="CGHNet in Pytorch")
@@ -72,13 +76,14 @@ parser.add_argument(
     "-m", "--model", default="CGHNet", type=str, metavar="MODEL", help="model name"
 )
 parser.add_argument("--eval", action="store_true")
-
-parser.add_argument(
-    "--weight", default="/home/robesafe/argo2goalmp/stable_ckpts/results_student/50.000.ckpt", type=str, metavar="WEIGHT", help="checkpoint path"
-)
 parser.add_argument(
     "--exp_name", default="results_student", type=str)
-
+parser.add_argument( 
+    "--weight_dir", default="stable_ckpts", type=str, metavar="WEIGHT", help="checkpoints directory"
+)
+parser.add_argument( 
+    "--ckpt", default="50.000.ckpt", type=str, metavar="CKPT", help="Specific checkpoint"
+)
 parser.add_argument(
     "--use_map", default=False, type=bool)
 parser.add_argument(
@@ -93,7 +98,8 @@ parser.add_argument(
 #######################################
 
 def plot_actor_tracks(ax: plt.Axes, 
-                      agents_info: List[NDArrayFloat]) -> Optional[_PlotBounds]:
+                      agents_info: List[NDArrayFloat],
+                      ego_vehicle_id: int) -> Optional[_PlotBounds]:
     """Plot all actor tracks (up to a particular time step) associated with an Argoverse scenario.
 
     Args:
@@ -108,7 +114,7 @@ def plot_actor_tracks(ax: plt.Axes,
         agent_id = int(agent_info[0,0])
         agent_trajectory = agent_info[agent_info[:,-1] == 0][:,2:4] # Filter agent to avoid plotting padded information
         
-        if agent_id == 1:
+        if agent_id == ego_vehicle_id:
             color = "#F39C12"
         else:
             color = "#27AE60"
@@ -203,26 +209,30 @@ def plot_predictions(output_predictions,
                     )
 
 def get_object_type(object_type):
-        x = np.zeros(3, np.float32)
-        if object_type == ObjectType.STATIC or object_type == ObjectType.BACKGROUND or object_type == ObjectType.CONSTRUCTION or object_type == ObjectType.RIDERLESS_BICYCLE:
-            x[:] = 0
-        elif object_type == ObjectType.PEDESTRIAN:
-            x[2] = 1
-        elif object_type == ObjectType.CYCLIST:
-            x[1] = 1
-        elif object_type == ObjectType.MOTORCYCLIST:
-            x[1] = 1
-            x[2] = 1
-        elif object_type == ObjectType.BUS:
-            x[0] = 1
-        elif object_type == ObjectType.VEHICLE:
-            x[0] = 1
-            x[2] = 1
-        elif object_type == ObjectType.UNKNOWN:
-            x[0] = 1
-            x[1] = 1
-            x[2] = 1
-        return x
+    """
+    """
+    
+    x = np.zeros(3, np.float32)
+    if object_type == ObjectType.STATIC or object_type == ObjectType.BACKGROUND or object_type == ObjectType.CONSTRUCTION or object_type == ObjectType.RIDERLESS_BICYCLE:
+        x[:] = 0
+    elif object_type == ObjectType.PEDESTRIAN:
+        x[2] = 1
+    elif object_type == ObjectType.CYCLIST:
+        x[1] = 1
+    elif object_type == ObjectType.MOTORCYCLIST:
+        x[1] = 1
+        x[2] = 1
+    elif object_type == ObjectType.BUS:
+        x[0] = 1
+    elif object_type == ObjectType.VEHICLE:
+        x[0] = 1
+        x[2] = 1
+    elif object_type == ObjectType.UNKNOWN:
+        x[0] = 1
+        x[1] = 1
+        x[2] = 1
+        
+    return x
                   
 def main():
     """
@@ -240,11 +250,8 @@ def main():
                                                                                     map_in_decoder=args.map_in_decoder)
         
         ## Load pretrained model
-        
-        ckpt_path = args.weight
-        
-        if not os.path.isabs(ckpt_path):
-            ckpt_path = os.path.join(config["save_dir"], ckpt_path)
+
+        ckpt_path = os.path.join(BASE_DIR, args.weight_dir, args.exp_name, args.ckpt)
             
         ckpt = torch.load(ckpt_path, map_location=lambda storage, loc: storage)
         utils.load_pretrain(net, ckpt["state_dict"])
@@ -283,8 +290,10 @@ def main():
             if not (agent_info[:,-1] == 1).all(): # Avoid storing full-padded agents 
                 valid_agents_info.append(agent_info)
 
-        plot_actor_tracks(ax, valid_agents_info)   
-        
+        origin = valid_agents_info[0][-1,2:4]
+        ego_vehicle_id = valid_agents_info[0][0,0]
+        plot_actor_tracks(ax, valid_agents_info, ego_vehicle_id)   
+            
         if PREDICT_AGENTS:
             ## Preprocess agents (relative displacements, orientation, etc.)
             
@@ -356,8 +365,12 @@ def main():
                 data['rot'] = [rot]
                 
                 data = from_numpy(data) # Recursively transform numpy.ndarray to torch.Tensor
+                
+                start = time.time()
                 output = net(data)
-  
+                end = time.time()
+                print("Inference time: ", end-start)
+                
                 for agent_index in range(feats.shape[0]):
                     focal_agent_mm_pred = output["reg"][0][agent_index,:,:,:].cpu().data.numpy()
                     focal_agent_cls = output["cls"][0][agent_index,:].cpu().data.numpy()
@@ -367,9 +380,16 @@ def main():
             else:
                 pass
 
-        plt.xlim([-30, 30], auto=False)
-        plt.ylim([0, 120], auto=False)
-    
+        offset = 150
+        
+        x_min = origin[0] - offset / 2
+        x_max = origin[0] + offset / 2
+        y_min = origin[1] - offset / 2
+        y_max = origin[1] + offset / 2
+        
+        plt.xlim([x_min, x_max], auto=False)
+        plt.ylim([y_min, y_max], auto=False)
+                 
         filename = os.path.join(SAVE_DIR, ADDITIONAL_STRING+str(file_id)+".png")
         plt.savefig(filename, bbox_inches='tight', facecolor="white", edgecolor='none', pad_inches=0)
         plt.close('all')

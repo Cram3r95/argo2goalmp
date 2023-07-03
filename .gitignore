@@ -161,5 +161,6 @@ cython_debug/
 
 # This repository
 
-saved_models/
-smarts_simulator_scenarios/
+poses/
+poses_plots/
+poses_with_predictions_plots/

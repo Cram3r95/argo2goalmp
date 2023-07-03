@@ -473,7 +473,7 @@ def main():
 
         with torch.no_grad():
             start = time.time()
-            # output = net(data)
+            output = net(data)
             end = time.time()
 
             print("Inference time: ", end-start)
