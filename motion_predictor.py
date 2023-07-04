@@ -4,6 +4,10 @@
 """
 Created on Mon July 03 17:46:19 2023
 @author: Carlos Gómez Huélamo
+
+Scenarios of interest: 
+
+<route id="25" town="Town05"> Test
 """
 
 # General purpose imports
@@ -39,30 +43,34 @@ repo = git.Repo(__file__, search_parent_directories=True)
 BASE_DIR = repo.working_tree_dir
 sys.path.append(BASE_DIR)
 
-from utils import load_pretrain
-from data import from_numpy, get_object_type
+from model.utils.utils import load_pretrain
+from preprocess.data import from_numpy, get_object_type
+
+# Global variables
 
 #######################################
+
+# Main class
 
 class Motion_Predictor():
     def __init__(self):
         """
         """
         
-        self.CONFIDENCE_THRESHOLD = 0.0 # The mode must have at least 0.2 out of 1.0 to be plotted
         self.NUM_MODES = 6
         self.OBS_LEN = 50
         self.PRED_LEN = 60
         self.required_variables = 5 # id, obs_num, x, y, padding
         self.TINY_PREDICTION = False
         
-        self.THRESHOLD_NUM_OBSERVATIONS = 20 # Minimum number of observations out of self.OBS_LEN (e.g. 20 out of 50),
+        self.THRESHOLD_NUM_OBSERVATIONS = 5 # Minimum number of observations out of self.OBS_LEN (e.g. 20 out of 50),
                                   # to start predicting an agent
         self.NUM_STEPS = 10 # To obtain predictions every n-th STEP
         self.NUM_PREDICTED_POSES = 4 # e.g. t+0, t+STEP, t+2*STEP, t+3*STEP
         
         self.prediction_network = self.get_prediction_model()
 
+        self.CONFIDENCE_THRESHOLD = 0.25 # The mode must have at least 0.2 out of 1.0 to be plotted
         self.pub_predictions_marker = rospy.Publisher("/t4ac/perception/prediction/prediction_markers", MarkerArray, queue_size=10)
         
     def get_prediction_model(self):
@@ -88,7 +96,7 @@ class Motion_Predictor():
 
         args = SimpleNamespace(**args)
 
-        model = import_module("src.%s" % args.model)
+        model = import_module("model.models.%s" % args.model)
         config, Dataset, collate_fn, net, loss, post_process, opt = model.get_model(exp_name=args.exp_name,
                                                                                     distill=args.distill,
                                                                                     use_map=args.use_map,
@@ -277,8 +285,8 @@ class Motion_Predictor():
         slope = (1 - 1/self.NUM_MODES) / (self.NUM_MODES - 1)
             
         for num_agent, agent_predictions in enumerate(predictions):
-            if num_agent == 0: # Avoid plotting the predictions of the ego-vehicle
-                continue 
+            # if num_agent == 0: # Avoid plotting the predictions of the ego-vehicle
+            #     continue 
             
             sorted_confidences = np.sort(confidences[num_agent])
             

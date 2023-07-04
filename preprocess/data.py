@@ -1,5 +1,4 @@
-
-
+import time
 import numpy as np
 import torch
 from torch.utils.data import Dataset
@@ -13,8 +12,8 @@ from av2.datasets.motion_forecasting.data_schema import ArgoverseScenario, Objec
 # from map_api import ArgoverseStaticMap
 from av2.map.map_api import ArgoverseStaticMap 
 from av2.map.lane_segment import *
-from lane_segment import *
-import time
+
+from preprocess.lane_segment import *
 
 _STATIC_OBJECT_TYPES: Set[ObjectType] = {
     ObjectType.STATIC,
