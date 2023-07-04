@@ -19,12 +19,15 @@ import sys
 # DL & Math imports
 
 import torch
+import numpy as np
 
 from torch import optim
 
 # Plot imports
 
 # Custom imports
+
+from av2.datasets.motion_forecasting.data_schema import ObjectType
 
 #######################################
 
@@ -124,6 +127,32 @@ def rotate(xy, theta):
     rot_mat[:, 1, 1] = ct
     xy = torch.matmul(rot_mat, xy.unsqueeze(2)).view(len(xy), 2)
     return xy
+
+def get_object_type(object_type):
+    """
+    """
+    
+    x = np.zeros(3, np.float32)
+    if object_type == ObjectType.STATIC or object_type == ObjectType.BACKGROUND or object_type == ObjectType.CONSTRUCTION or object_type == ObjectType.RIDERLESS_BICYCLE:
+        x[:] = 0
+    elif object_type == ObjectType.PEDESTRIAN:
+        x[2] = 1
+    elif object_type == ObjectType.CYCLIST:
+        x[1] = 1
+    elif object_type == ObjectType.MOTORCYCLIST:
+        x[1] = 1
+        x[2] = 1
+    elif object_type == ObjectType.BUS:
+        x[0] = 1
+    elif object_type == ObjectType.VEHICLE:
+        x[0] = 1
+        x[2] = 1
+    elif object_type == ObjectType.UNKNOWN:
+        x[0] = 1
+        x[1] = 1
+        x[2] = 1
+        
+    return x
 
 def merge_dict(ds, dt):
     for key in ds:

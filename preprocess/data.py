@@ -23,6 +23,111 @@ _STATIC_OBJECT_TYPES: Set[ObjectType] = {
     ObjectType.RIDERLESS_BICYCLE,
 }
 
+# Aux functions
+
+def get_object_type(object_type):
+        x = np.zeros(3, np.float32)
+        if object_type == ObjectType.STATIC or object_type == ObjectType.BACKGROUND or object_type == ObjectType.CONSTRUCTION or object_type == ObjectType.RIDERLESS_BICYCLE:
+            x[:] = 0
+        elif object_type == ObjectType.PEDESTRIAN:
+            x[2] = 1
+        elif object_type == ObjectType.CYCLIST:
+            x[1] = 1
+        elif object_type == ObjectType.MOTORCYCLIST:
+            x[1] = 1
+            x[2] = 1
+        elif object_type == ObjectType.BUS:
+            x[0] = 1
+        elif object_type == ObjectType.VEHICLE:
+            x[0] = 1
+            x[2] = 1
+        elif object_type == ObjectType.UNKNOWN:
+            x[0] = 1
+            x[1] = 1
+            x[2] = 1
+        return x
+            
+def get_mark_type(x, mark_type):
+    # none = 0, sigle_line = 1, double_line =2; dash = 0, solid =1; dash = 0, solid =1; white =0, yellow = 1, blue =2; 
+    if mark_type == LaneMarkType.DASH_SOLID_YELLOW:
+        x[:, 0] = 2
+        x[:, 1] = 0
+        x[:, 2] = 1
+        x[:, 3] = 1
+    elif mark_type == LaneMarkType.DASH_SOLID_WHITE:
+        x[:, 0] = 2
+        x[:, 1] = 0
+        x[:, 2] = 1
+        x[:, 3] = 0
+    elif mark_type == LaneMarkType.DASHED_WHITE:   
+        x[:, 0] = 1
+        x[:, 1] = 0
+        x[:, 2] = 0
+        x[:, 3] = 0
+    elif mark_type == LaneMarkType.DASHED_YELLOW:   
+        x[:, 0] = 1
+        x[:, 1] = 0
+        x[:, 2] = 0  
+        x[:, 3] = 1
+    elif mark_type == LaneMarkType.DOUBLE_SOLID_YELLOW:
+        x[:, 0] = 2
+        x[:, 1] = 1
+        x[:, 2] = 1
+        x[:, 3] = 1
+    elif mark_type == LaneMarkType.DOUBLE_SOLID_WHITE:   
+        x[:, 0] = 2
+        x[:, 1] = 1
+        x[:, 2] = 1
+        x[:, 3] = 0
+    elif mark_type == LaneMarkType.DOUBLE_DASH_YELLOW:   
+        x[:, 0] = 2
+        x[:, 1] = 0
+        x[:, 2] = 0  
+        x[:, 3] = 1            
+    elif mark_type == LaneMarkType.DOUBLE_DASH_WHITE:
+        x[:, 0] = 2
+        x[:, 1] = 0
+        x[:, 2] = 0
+        x[:, 3] = 0
+    elif mark_type == LaneMarkType.SOLID_YELLOW:   
+        x[:, 0] = 1
+        x[:, 1] = 1
+        x[:, 2] = 1
+        x[:, 3] = 1
+    elif mark_type == LaneMarkType.SOLID_WHITE:   
+        x[:, 0] = 1
+        x[:, 1] = 1
+        x[:, 2] = 1  
+        x[:, 3] = 0
+    elif mark_type == LaneMarkType.SOLID_DASH_WHITE:
+        x[:, 0] = 2
+        x[:, 1] = 1
+        x[:, 2] = 0
+        x[:, 3] = 0
+    elif mark_type == LaneMarkType.SOLID_DASH_YELLOW:   
+        x[:, 0] = 2
+        x[:, 1] = 1
+        x[:, 2] = 0
+        x[:, 3] = 1
+    elif mark_type == LaneMarkType.SOLID_BLUE:   
+        x[:, 0] = 1
+        x[:, 1] = 1
+        x[:, 2] = 1  
+        x[:, 3] = 2 
+    elif mark_type == LaneMarkType.UNKNOWN:
+        x[:, 0] = 1
+        x[:, 1] = 0
+        x[:, 2] = 0  
+        x[:, 3] = 0 
+    elif mark_type == LaneMarkType.NONE:   
+        x[:, 0] = 0
+        x[:, 1] = 0
+        x[:, 2] = 0  
+        x[:, 3] = 0 
+    return x
+
+# Argoverse 2 dataset
+
 class ArgoDataset(Dataset):
     def __init__(self, split, config, train=True):
         self.config = config
@@ -78,7 +183,7 @@ class ArgoDataset(Dataset):
                 agent_traj: NDArrayFloat = np.array([list(object_state.position) for object_state in track.object_states])
                 agent_steps = np.array([object_state.timestep for object_state in track.object_states], np.int64)
                 agent_track_id = track.track_id
-                agent_type = self.get_object_type(track.object_type)
+                agent_type = get_object_type(track.object_type)
             else:
                 if track.object_type in _STATIC_OBJECT_TYPES:
                     continue
@@ -91,7 +196,7 @@ class ArgoDataset(Dataset):
                 trajs.append(actor_traj)
                 steps.append(actor_steps)
                 track_ids.append(track.track_id)
-                object_types.append(self.get_object_type(track.object_type))
+                object_types.append(get_object_type(track.object_type))
                 
         trajs = [agent_traj] + trajs
         steps = [agent_steps] + steps
@@ -192,11 +297,11 @@ class ArgoDataset(Dataset):
             lane_type.append(x)
             
             x = np.zeros((num_segs, 4), np.float32)
-            left_x = self.get_mark_type(x, lane.left_mark_type)
+            left_x = get_mark_type(x, lane.left_mark_type)
             left_mark_type.append(left_x)
             
             x = np.zeros((num_segs, 4), np.float32)
-            right_x = self.get_mark_type(x, lane.right_mark_type)
+            right_x = get_mark_type(x, lane.right_mark_type)
             right_mark_type.append(right_x)
             
         node_idcs = []
@@ -304,107 +409,6 @@ class ArgoDataset(Dataset):
             else:
                 graph[key] += dilated_nbrs(graph[key][0], graph['num_nodes'], self.config['num_scales'])
         return graph
-    
-    def get_object_type(self, object_type):
-        x = np.zeros(3, np.float32)
-        if object_type == ObjectType.STATIC or object_type == ObjectType.BACKGROUND or object_type == ObjectType.CONSTRUCTION or object_type == ObjectType.RIDERLESS_BICYCLE:
-            x[:] = 0
-        elif object_type == ObjectType.PEDESTRIAN:
-            x[2] = 1
-        elif object_type == ObjectType.CYCLIST:
-            x[1] = 1
-        elif object_type == ObjectType.MOTORCYCLIST:
-            x[1] = 1
-            x[2] = 1
-        elif object_type == ObjectType.BUS:
-            x[0] = 1
-        elif object_type == ObjectType.VEHICLE:
-            x[0] = 1
-            x[2] = 1
-        elif object_type == ObjectType.UNKNOWN:
-            x[0] = 1
-            x[1] = 1
-            x[2] = 1
-        return x
-            
-    def get_mark_type(self, x, mark_type):
-        # none = 0, sigle_line = 1, double_line =2; dash = 0, solid =1; dash = 0, solid =1; white =0, yellow = 1, blue =2; 
-        if mark_type == LaneMarkType.DASH_SOLID_YELLOW:
-            x[:, 0] = 2
-            x[:, 1] = 0
-            x[:, 2] = 1
-            x[:, 3] = 1
-        elif mark_type == LaneMarkType.DASH_SOLID_WHITE:
-            x[:, 0] = 2
-            x[:, 1] = 0
-            x[:, 2] = 1
-            x[:, 3] = 0
-        elif mark_type == LaneMarkType.DASHED_WHITE:   
-            x[:, 0] = 1
-            x[:, 1] = 0
-            x[:, 2] = 0
-            x[:, 3] = 0
-        elif mark_type == LaneMarkType.DASHED_YELLOW:   
-            x[:, 0] = 1
-            x[:, 1] = 0
-            x[:, 2] = 0  
-            x[:, 3] = 1
-        elif mark_type == LaneMarkType.DOUBLE_SOLID_YELLOW:
-            x[:, 0] = 2
-            x[:, 1] = 1
-            x[:, 2] = 1
-            x[:, 3] = 1
-        elif mark_type == LaneMarkType.DOUBLE_SOLID_WHITE:   
-            x[:, 0] = 2
-            x[:, 1] = 1
-            x[:, 2] = 1
-            x[:, 3] = 0
-        elif mark_type == LaneMarkType.DOUBLE_DASH_YELLOW:   
-            x[:, 0] = 2
-            x[:, 1] = 0
-            x[:, 2] = 0  
-            x[:, 3] = 1            
-        elif mark_type == LaneMarkType.DOUBLE_DASH_WHITE:
-            x[:, 0] = 2
-            x[:, 1] = 0
-            x[:, 2] = 0
-            x[:, 3] = 0
-        elif mark_type == LaneMarkType.SOLID_YELLOW:   
-            x[:, 0] = 1
-            x[:, 1] = 1
-            x[:, 2] = 1
-            x[:, 3] = 1
-        elif mark_type == LaneMarkType.SOLID_WHITE:   
-            x[:, 0] = 1
-            x[:, 1] = 1
-            x[:, 2] = 1  
-            x[:, 3] = 0
-        elif mark_type == LaneMarkType.SOLID_DASH_WHITE:
-            x[:, 0] = 2
-            x[:, 1] = 1
-            x[:, 2] = 0
-            x[:, 3] = 0
-        elif mark_type == LaneMarkType.SOLID_DASH_YELLOW:   
-            x[:, 0] = 2
-            x[:, 1] = 1
-            x[:, 2] = 0
-            x[:, 3] = 1
-        elif mark_type == LaneMarkType.SOLID_BLUE:   
-            x[:, 0] = 1
-            x[:, 1] = 1
-            x[:, 2] = 1  
-            x[:, 3] = 2 
-        elif mark_type == LaneMarkType.UNKNOWN:
-            x[:, 0] = 1
-            x[:, 1] = 0
-            x[:, 2] = 0  
-            x[:, 3] = 0 
-        elif mark_type == LaneMarkType.NONE:   
-            x[:, 0] = 0
-            x[:, 1] = 0
-            x[:, 2] = 0  
-            x[:, 3] = 0 
-        return x
     
 class ArgoTestDataset(ArgoDataset):
     def __init__(self, split, config, train=False):
@@ -525,8 +529,7 @@ def cat(batch):
 
 if __name__ == "__main__":     
     config = dict()                               
-#    config["argo2_train_split"] = "/home/hadoop-wallepnc-hulk/cephfs/data/wangmingkun/data/argoverse2/val"
-    config["argo2_train_split"] = "/Users/wangmingkun/Desktop/workspace/datasets/argoverse2/test_data"
+    config["argo2_train_split"] = "/YOUR_PATH"
     config["num_scales"] = 6
     argo2_data = ArgoDataset(1, config)    
     argo2_data.__getitem__(0)

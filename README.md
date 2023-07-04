@@ -1,5 +1,7 @@
 # Improving Multi-Agent Motion Prediction with Heuristic Goals and Motion Refinement
 
+## Trained and validated in Argoverse 2
+
 <!-- TODO: arxiv of AI City challenge paper -->
 <!-- [![Paper](https://img.shields.io/badge/arXiv-Paper-<COLOR>.svg)]([https://arxiv.org/abs/2205.13071](https://openaccess.thecvf.com/content/CVPR2023W/AICity/html/Conde_Improving_Multi-Agent_Motion_Prediction_With_Heuristic_Goals_and_Motion_Refinement_CVPRW_2023_paper.html)) -->
 <!-- ![visitors](https://visitor-badge.glitch.me/badge?page_id=Cram3r95/mapfe4mp) -->
@@ -29,7 +31,7 @@ Our papers:
 
 ## Model
 
-<img src="system_pipeline.PNG"/>
+<img src="media/system_pipeline.PNG"/>
 
 <!--
 ## MFTF Model 
