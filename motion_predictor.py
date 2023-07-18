@@ -140,9 +140,9 @@ class Motion_Predictor():
         for agent_id in agents_id:
             agent_info = agents_info_array[agents_info_array[:, 0] == agent_id]
 
-            # if not (agent_info[:, -1] == 1).all():  # Avoid storing full-padded agents
-            if np.sum(agent_info[:,-1] == 1) >= self.THRESHOLD_NUM_OBSERVATIONS: # Only consider those that have at least 
-                                                                      # self.THRESHOLD_STEPS of observations
+            # if not (agent_info[:, -1] == 0).all():  # Avoid storing full-padded agents
+            if np.sum(agent_info[:,-1] == 1) >= self.THRESHOLD_NUM_OBSERVATIONS: # Only consider those agents that have 
+                                                                                 # at least self.THRESHOLD_STEPS of observations
                 valid_agents_info.append(agent_info)
                 valid_agents_id.append(int(agent_info[0,0]))
                       
@@ -167,6 +167,7 @@ class Motion_Predictor():
 
         for agent_info in valid_agents_info:
             non_padded_agent_info = agent_info[agent_info[:, -1] == 1]
+            
             trajs.append(non_padded_agent_info[:, 2:4])
             steps.append(non_padded_agent_info[:, 1].astype(np.int64))
             
