@@ -61,8 +61,8 @@ class Motion_Predictor():
         self.OBS_LEN = 50
         self.PRED_LEN = 60
         self.required_variables = 5 # id, obs_num, x, y, padding
-        self.TINY_PREDICTION = False
         
+        self.TINY_PREDICTION = False
         self.THRESHOLD_NUM_OBSERVATIONS = 5 # Minimum number of observations out of self.OBS_LEN (e.g. 20 out of 50),
                                   # to start predicting an agent
         self.NUM_STEPS = 10 # To obtain predictions every n-th STEP
@@ -181,9 +181,15 @@ class Motion_Predictor():
             pre_current_step_index = current_step_index-1
 
             orig = trajs[0][current_step_index][:2].copy().astype(np.float32)
-            pre = trajs[0][pre_current_step_index][:2] - orig
-
-            theta = np.arctan2(pre[1], pre[0])
+            
+            # pre = trajs[0][pre_current_step_index][:2] - orig
+            # theta = np.arctan2(pre[1], pre[0])
+            
+            curr_pos = trajs[0][current_step_index][:2]
+            pre_pos = trajs[0][pre_current_step_index][:2]
+            theta = np.arctan2(curr_pos[1] - pre_pos[1], 
+                               curr_pos[0] - pre_pos[0])
+            
             rot = np.asarray([[np.cos(theta), -np.sin(theta)],
 
                               [np.sin(theta), np.cos(theta)]], np.float32)
