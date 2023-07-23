@@ -53,7 +53,7 @@ from preprocess.data import from_numpy, get_object_type
 # Main class
 
 class Motion_Predictor():
-    def __init__(self):
+    def __init__(self, get_model=False):
         """
         """
         
@@ -62,15 +62,17 @@ class Motion_Predictor():
         self.PRED_LEN = 60
         self.required_variables = 5 # id, obs_num, x, y, padding
         
-        self.TINY_PREDICTION = False
+        self.VISUALIZE_EGO_TRAJECTORY = False
+        self.PREDICTION_TYPE = "multimodal"
+        self.TINY_VISUALIZATION = False # Represent only few future steps for visualization purposes
         self.THRESHOLD_NUM_OBSERVATIONS = 5 # Minimum number of observations out of self.OBS_LEN (e.g. 20 out of 50),
                                   # to start predicting an agent
         self.NUM_STEPS = 10 # To obtain predictions every n-th STEP
         self.NUM_PREDICTED_POSES = 4 # e.g. t+0, t+STEP, t+2*STEP, t+3*STEP
         
-        self.prediction_network = self.get_prediction_model()
+        if get_model: self.prediction_network = self.get_prediction_model()
 
-        self.CONFIDENCE_THRESHOLD = 0.25 # The mode must have at least 0.2 out of 1.0 to be plotted
+        self.CONFIDENCE_THRESHOLD = 0.1 # The mode must have at least 0.2 out of 1.0 to be plotted
         self.pub_predictions_marker = rospy.Publisher("/t4ac/perception/prediction/prediction_markers", MarkerArray, queue_size=10)
         
     def get_prediction_model(self):
@@ -176,15 +178,12 @@ class Motion_Predictor():
 
         # Our ego-vehicle is always the first agent of the scenario
         
-        if trajs[0].shape[0] > 1:
+        if len(trajs) > 0 and trajs[0].shape[0] > 1:
 
             current_step_index = steps[0].tolist().index(self.OBS_LEN-1)
             pre_current_step_index = current_step_index-1
 
             orig = trajs[0][current_step_index][:2].copy().astype(np.float32)
-            
-            # pre = trajs[0][pre_current_step_index][:2] - orig
-            # theta = np.arctan2(pre[1], pre[0])
             
             curr_pos = trajs[0][current_step_index][:2]
             pre_pos = trajs[0][pre_current_step_index][:2]
@@ -192,8 +191,7 @@ class Motion_Predictor():
                                curr_pos[0] - pre_pos[0])
             
             rot = np.asarray([[np.cos(theta), -np.sin(theta)],
-
-                              [np.sin(theta), np.cos(theta)]], np.float32)
+                              [np.sin(theta),  np.cos(theta)]], np.float32)
 
             feats, ctrs, valid_track_ids, valid_object_types = [], [], [], []
 
@@ -207,6 +205,7 @@ class Motion_Predictor():
                 valid_object_types.append(object_type)
 
                 obs_mask = step < self.OBS_LEN
+                
                 step = step[obs_mask]
                 traj = traj[obs_mask]
                 idcs = step.argsort()
@@ -214,8 +213,7 @@ class Motion_Predictor():
                 traj = traj[idcs]
                 feat = np.zeros((self.OBS_LEN, 3), np.float32)
 
-                feat[step, :2] = np.matmul(
-                    rot, (traj[:, :2] - orig.reshape(-1, 2)).T).T
+                feat[step, :2] = np.matmul(rot, (traj[:, :2] - orig.reshape(-1, 2)).T).T
                 feat[step, 2] = 1.0
 
                 ctrs.append(feat[-1, :2].copy())
@@ -247,11 +245,10 @@ class Motion_Predictor():
             output = self.prediction_network(data)
 
             for agent_index in range(feats.shape[0]):
-                agent_mm_pred = output["reg"][0][agent_index,
-                                                 :, :, :].cpu().data.numpy()
-                agent_cls = output["cls"][0][agent_index, :].cpu().data.numpy()
+                agent_mm_pred = output["reg"][0][agent_index,:,:,:].cpu().data.numpy()
+                agent_cls = output["cls"][0][agent_index,:].cpu().data.numpy()
 
-                if self.TINY_PREDICTION: # Unimodal prediction (60 x 2)
+                if self.PREDICTION_TYPE == "unimodal": # Unimodal prediction (60 x 2)
                     most_probable_mode_index = np.argmax(agent_cls)
                     agent_um_pred = agent_mm_pred[most_probable_mode_index, :, :]
                     agent_um_pred = agent_um_pred[::self.NUM_STEPS,:][:self.NUM_PREDICTED_POSES, :]
@@ -262,26 +259,8 @@ class Motion_Predictor():
                     final_confidences.append(agent_cls)
 
         return final_predictions, final_confidences
-
-    def write_csv(self, obs, timestamp):
-        results_path = f"./scenarios/SMARTS/poses"
-
-        if not os.path.exists(results_path):
-            print("Create results path folder: ", results_path)
-            os.makedirs(results_path)
-
-        with open(f'{results_path}/poses_{timestamp}.csv', 'w', newline='') as file:
-            writer = csv.writer(file, delimiter=' ', quotechar='|', quoting=csv.QUOTE_MINIMAL)
-
-            for key in obs.keys():
-                    for num_obs in range(len(obs[key])):
-                        writer.writerow([key, 
-                                        num_obs, 
-                                        obs[key][num_obs][0],
-                                        obs[key][num_obs][1],
-                                        obs[key][num_obs][2]])
                         
-    def plot_predictions_ros_markers(self, predictions, confidences, valid_agents_id, timestamp):
+    def plot_predictions_ros_markers(self, predictions, confidences, valid_agents_id, timestamp, colours_palette, apply_colour=False, lifetime=0.5):
         """
         """
         
@@ -292,8 +271,10 @@ class Motion_Predictor():
         slope = (1 - 1/self.NUM_MODES) / (self.NUM_MODES - 1)
             
         for num_agent, agent_predictions in enumerate(predictions):
-            # if num_agent == 0: # Avoid plotting the predictions of the ego-vehicle
-            #     continue 
+            # Avoid plotting the predictions of the ego-vehicle
+            
+            if num_agent == 0 and not self.VISUALIZE_EGO_TRAJECTORY: 
+                continue 
             
             sorted_confidences = np.sort(confidences[num_agent])
             
@@ -308,33 +289,83 @@ class Motion_Predictor():
                 agent_predictions_marker.ns = f"agent_{valid_agents_id[num_agent]}_predictions"
                 
                 agent_predictions_marker.action = agent_predictions_marker.ADD
-                agent_predictions_marker.lifetime = rospy.Duration.from_sec(0.5)
+                agent_predictions_marker.lifetime = rospy.Duration.from_sec(lifetime)
 
                 agent_predictions_marker.id = num_agent * agent_predictions.shape[0] + num_mode
-                # agent_predictions_marker.type = Marker.LINE_STRIP
-                agent_predictions_marker.type = Marker.POINTS
-
-                agent_predictions_marker.color.r = 0.2
-                agent_predictions_marker.color.g = 0.4
-                agent_predictions_marker.color.b = 0.0
+                agent_predictions_marker.type = Marker.LINE_STRIP
+                # agent_predictions_marker.type = Marker.POINTS
                 
                 conf_index = np.where(confidences[num_agent][num_mode] == sorted_confidences)[0].item()
                 agent_predictions_marker.color.a = round(slope * (conf_index + 1),2)
                 
-                agent_predictions_marker.scale.x = 0.4
+                if apply_colour:
+                    colour = colours_palette[valid_agents_id[num_agent]%colours_palette.shape[0]]
+                    agent_predictions_marker.color.r = colour[0]
+                    agent_predictions_marker.color.g = colour[1]
+                    agent_predictions_marker.color.b = colour[2]
+                else:
+                    agent_predictions_marker.color.r = 0.2
+                    agent_predictions_marker.color.g = 0.4
+                    agent_predictions_marker.color.b = 0.0
+                
+                agent_predictions_marker.scale.x = 0.5
                 agent_predictions_marker.pose.orientation.w = 1.0
                 
                 assert self.PRED_LEN == agent_predictions.shape[1]
                 
-                for num_pred in range(self.PRED_LEN):
+                if self.TINY_VISUALIZATION:
+                    curr_agent_predictions = agent_predictions[num_mode,::self.NUM_STEPS,:]
+                else:
+                    curr_agent_predictions = agent_predictions[num_mode,:,:]
+                    
+                for num_pred in range(curr_agent_predictions.shape[0]):
                     point = Point()
 
-                    point.x = agent_predictions[num_mode,num_pred,0]
-                    point.y = agent_predictions[num_mode,num_pred,1]
+                    point.x = curr_agent_predictions[num_pred,0]
+                    point.y = curr_agent_predictions[num_pred,1]
                     point.z = 0
 
                     agent_predictions_marker.points.append(point)
 
                 predictions_markers_list.markers.append(agent_predictions_marker)
+                
+                # End-Point
+                
+                agent_prediction_end_point_marker = Marker()
+                agent_prediction_end_point_marker.header.frame_id = "/map"
+                agent_prediction_end_point_marker.header.stamp = timestamp
+            
+                agent_prediction_end_point_marker.ns = f"agent_{valid_agents_id[num_agent]}_predictions_end_points"
+                
+                agent_prediction_end_point_marker.action = agent_prediction_end_point_marker.ADD
+                agent_prediction_end_point_marker.lifetime = rospy.Duration.from_sec(lifetime)
 
+                agent_prediction_end_point_marker.id = num_agent * agent_predictions.shape[0] + num_mode
+                agent_prediction_end_point_marker.type = Marker.SPHERE
+                
+                conf_index = np.where(confidences[num_agent][num_mode] == sorted_confidences)[0].item()
+                agent_prediction_end_point_marker.color.a = round(slope * (conf_index + 1),2)
+                
+                if apply_colour:
+                    colour = colours_palette[valid_agents_id[num_agent]%colours_palette.shape[0]]
+                    agent_prediction_end_point_marker.color.r = colour[0]
+                    agent_prediction_end_point_marker.color.g = colour[1]
+                    agent_prediction_end_point_marker.color.b = colour[2]
+                else:
+                    agent_prediction_end_point_marker.color.r = 0.2
+                    agent_prediction_end_point_marker.color.g = 0.4
+                    agent_prediction_end_point_marker.color.b = 0.0
+                
+                agent_prediction_end_point_marker.scale.x = 1.0
+                agent_prediction_end_point_marker.scale.y = 1.0
+                agent_prediction_end_point_marker.scale.z = 1.0
+                
+                agent_prediction_end_point_marker.pose.orientation.w = 1.0
+
+                agent_prediction_end_point_marker.pose.position.x = curr_agent_predictions[-1,0]
+                agent_prediction_end_point_marker.pose.position.y = curr_agent_predictions[-1,1]
+                agent_prediction_end_point_marker.pose.position.z = 0
+                
+                predictions_markers_list.markers.append(agent_prediction_end_point_marker)
+                
         self.pub_predictions_marker.publish(predictions_markers_list)

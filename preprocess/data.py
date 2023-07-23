@@ -25,26 +25,26 @@ _STATIC_OBJECT_TYPES: Set[ObjectType] = {
 # Aux functions
 
 def get_object_type(object_type):
-        x = np.zeros(3, np.float32)
-        if object_type == ObjectType.STATIC or object_type == ObjectType.BACKGROUND or object_type == ObjectType.CONSTRUCTION or object_type == ObjectType.RIDERLESS_BICYCLE:
-            x[:] = 0
-        elif object_type == ObjectType.PEDESTRIAN:
-            x[2] = 1
-        elif object_type == ObjectType.CYCLIST:
-            x[1] = 1
-        elif object_type == ObjectType.MOTORCYCLIST:
-            x[1] = 1
-            x[2] = 1
-        elif object_type == ObjectType.BUS:
-            x[0] = 1
-        elif object_type == ObjectType.VEHICLE:
-            x[0] = 1
-            x[2] = 1
-        elif object_type == ObjectType.UNKNOWN:
-            x[0] = 1
-            x[1] = 1
-            x[2] = 1
-        return x
+    x = np.zeros(3, np.float32)
+    if object_type == ObjectType.STATIC or object_type == ObjectType.BACKGROUND or object_type == ObjectType.CONSTRUCTION or object_type == ObjectType.RIDERLESS_BICYCLE:
+        x[:] = 0
+    elif object_type == ObjectType.PEDESTRIAN:
+        x[2] = 1
+    elif object_type == ObjectType.CYCLIST:
+        x[1] = 1
+    elif object_type == ObjectType.MOTORCYCLIST:
+        x[1] = 1
+        x[2] = 1
+    elif object_type == ObjectType.BUS:
+        x[0] = 1
+    elif object_type == ObjectType.VEHICLE:
+        x[0] = 1
+        x[2] = 1
+    elif object_type == ObjectType.UNKNOWN:
+        x[0] = 1
+        x[1] = 1
+        x[2] = 1
+    return x
             
 def get_mark_type(x, mark_type):
     # none = 0, sigle_line = 1, double_line =2; dash = 0, solid =1; dash = 0, solid =1; white =0, yellow = 1, blue =2; 
