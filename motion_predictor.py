@@ -65,7 +65,7 @@ class Motion_Predictor():
         self.VISUALIZE_EGO_TRAJECTORY = False
         self.PREDICTION_TYPE = "multimodal"
         self.TINY_VISUALIZATION = False # Represent only few future steps for visualization purposes
-        self.THRESHOLD_NUM_OBSERVATIONS = 5 # Minimum number of observations out of self.OBS_LEN (e.g. 20 out of 50),
+        self.THRESHOLD_NUM_OBSERVATIONS = 3 # Minimum number of observations out of self.OBS_LEN (e.g. 20 out of 50),
                                   # to start predicting an agent
         self.NUM_STEPS = 10 # To obtain predictions every n-th STEP
         self.NUM_PREDICTED_POSES = 4 # e.g. t+0, t+STEP, t+2*STEP, t+3*STEP
@@ -211,15 +211,15 @@ class Motion_Predictor():
                 idcs = step.argsort()
                 step = step[idcs]
                 traj = traj[idcs]
+                
                 feat = np.zeros((self.OBS_LEN, 3), np.float32)
-
                 feat[step, :2] = np.matmul(rot, (traj[:, :2] - orig.reshape(-1, 2)).T).T
                 feat[step, 2] = 1.0
 
                 ctrs.append(feat[-1, :2].copy())
                 feat[1:, :2] -= feat[:-1, :2]
-
                 feat[step[0], :2] = 0
+
                 feats.append(feat)
 
             feats = np.asarray(feats, np.float32)
