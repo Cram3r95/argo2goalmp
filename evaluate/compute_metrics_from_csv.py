@@ -48,12 +48,12 @@ PREDICT_AGENTS = True
 COMPUTE_METRICS = True
 INTERPOLATE_METRICS = True
 
-RELATIVE_ROUTE = "data/datasets/CARLA/scenario_route22_town03_training"
+RELATIVE_ROUTE = "data/datasets/CARLA/scenario_route15_town04_testing"
 BASE_STRING = "poses"
 ADDITIONAL_STRING = "poses_"
 OBSERVATIONS_DIR = os.path.join(BASE_DIR,RELATIVE_ROUTE,BASE_STRING)
 GROUNDTRUTH_PATH = os.path.join(BASE_DIR,RELATIVE_ROUTE,"groundtruth.csv") 
-METRICS_PATH = os.path.join(BASE_DIR,RELATIVE_ROUTE,"metrics_2.pdf") 
+METRICS_PATH = os.path.join(BASE_DIR,RELATIVE_ROUTE,"metrics_interpolation.pdf") 
 
 PREDICTIONS_DIR = os.path.join(BASE_DIR,RELATIVE_ROUTE,"predictions") # To save .csv
 os.makedirs(PREDICTIONS_DIR, exist_ok=True)
@@ -103,7 +103,7 @@ def compute_predictions(motion_predictor):
     if it has been observed in the frame 2 and 104 respectively. Two many steps in the middle!!!
     """
     
-    print("Compute predictions ...")
+    print("Computing predictions ...")
     
     # Get files and sort
     
@@ -254,43 +254,92 @@ def compute_predictions(motion_predictor):
                     if ade_frame_k_6: valid_file_id_pred.append(file_id)
     
     if COMPUTE_METRICS: 
-        print("Compute final metrics ...")
+        print("Calculating final metrics ...")
         
         ade_k_1 = np.array(ade_k_1)
+        mean_ade_k_1 = round(ade_k_1.mean(),2)
+        
         ade_k_6 = np.array(ade_k_6)
+        mean_ade_k_6 = round(ade_k_6.mean(),2)
+        
         fde_k_1 = np.array(fde_k_1)
+        mean_fde_k_1 = round(fde_k_1.mean(),2)
+        
         fde_k_6 = np.array(fde_k_6)
-            
+        mean_fde_k_6 = round(fde_k_6.mean(),2)
+        
+        frames = valid_file_id_pred
+
         if INTERPOLATE_METRICS:
             x = np.array(valid_file_id_pred)
             X_ = np.linspace(x.min(), x.max(), len(valid_file_id_pred)*5)
             
-            X_Y_Spline = make_interp_spline(x, ade_k_1)
+            spline_degree = 2
+            
+            X_Y_Spline = make_interp_spline(x, ade_k_1, k=spline_degree)
             ade_k_1 = X_Y_Spline(X_)
             
-            X_Y_Spline = make_interp_spline(x, ade_k_6)
+            X_Y_Spline = make_interp_spline(x, ade_k_6, k=spline_degree)
             ade_k_6 = X_Y_Spline(X_)
             
-            X_Y_Spline = make_interp_spline(x, fde_k_1)
+            X_Y_Spline = make_interp_spline(x, fde_k_1, k=spline_degree)
             fde_k_1 = X_Y_Spline(X_)
             
-            X_Y_Spline = make_interp_spline(x, fde_k_6)
+            X_Y_Spline = make_interp_spline(x, fde_k_6, k=spline_degree)
             fde_k_6 = X_Y_Spline(X_)
         
-        SCENARIO_ID = 1
+            frames = X_
+            
+        SCENARIO_ID = 2
         
-        plt.title(f"Motion Prediction metrics in Scenario {SCENARIO_ID} \n", fontweight="bold", fontsize=15)
+        plt.title(f"Motion Prediction metrics in Scenario {SCENARIO_ID}", fontweight="bold", fontsize=15)
         
-        plt.suptitle(r'$\overline{minADE} (K=1): $'f'{round(ade_k_1.mean(),2)},'
-                     r' $\overline{minFDE} (K=1): $'f'{round(fde_k_1.mean(),2)},'
-                     r' $\overline{minADE} (K=6): $'f'{round(ade_k_6.mean(),2)},'
-                     r' $\overline{minFDE} (K=6): $'f'{round(fde_k_6.mean(),2)}', fontsize=12, y=0.93)
+        # plt.suptitle(r'$\overline{minADE} (K=1): $'f'{round(ade_k_1.mean(),2)},'
+        #              r' $\overline{minFDE} (K=1): $'f'{round(fde_k_1.mean(),2)},'
+        #              r' $\overline{minADE} (K=6): $'f'{round(ade_k_6.mean(),2)},'
+        #              r' $\overline{minFDE} (K=6): $'f'{round(fde_k_6.mean(),2)}', fontsize=12, y=0.93)
         
-        plt.plot(X_, ade_k_1, label="ADE k=1")
-        plt.plot(X_, ade_k_6, label="ADE k=6")
-        plt.plot(X_, fde_k_1, label="FDE k=1")
-        plt.plot(X_, fde_k_6, label="FDE k=6")
+        # Colours and alpha
         
+        colours = {"ade_k_1":"b",
+                   "ade_k_6":"r",
+                   "fde_k_1":"g",
+                   "fde_k_6":"m"}
+        linewidth_alpha = {"mean":[2,1.0],"all":[1.5,0.5]}
+        
+        # All values
+        
+        plt.plot(frames, ade_k_1, label="ADE k=1", 
+                 color=colours["ade_k_1"], linewidth=linewidth_alpha["all"][0], alpha=linewidth_alpha["all"][1])
+        plt.plot(frames, ade_k_6, label="ADE k=6", 
+                 color=colours["ade_k_6"], linewidth=linewidth_alpha["all"][0], alpha=linewidth_alpha["all"][1])
+        plt.plot(frames, fde_k_1, label="FDE k=1", 
+                 color=colours["fde_k_1"], linewidth=linewidth_alpha["all"][0], alpha=linewidth_alpha["all"][1])
+        plt.plot(frames, fde_k_6, label="FDE k=6", 
+                 color=colours["fde_k_6"], linewidth=linewidth_alpha["all"][0], alpha=linewidth_alpha["all"][1])
+        
+        # Means
+        
+        plt.axhline(y = mean_ade_k_1, color=colours["ade_k_1"], 
+                    linestyle = '-', linewidth=linewidth_alpha["mean"][0], alpha=linewidth_alpha["mean"][1])
+        plt.text(x=len(valid_file_id_pred)-50,y=mean_ade_k_1+0.1,s=mean_ade_k_1, fontweight="bold", fontsize=8)
+                #  color=colours["ade_k_1"])
+        
+        plt.axhline(y = mean_ade_k_6, color=colours["ade_k_6"], 
+                    linestyle = '-', linewidth=linewidth_alpha["mean"][0], alpha=linewidth_alpha["mean"][1])
+        plt.text(x=len(valid_file_id_pred)-50,y=mean_ade_k_6+0.1,s=mean_ade_k_6, fontweight="bold", fontsize=8)
+                #  color=colours["ade_k_6"])
+        
+        plt.axhline(y = mean_fde_k_1, color=colours["fde_k_1"], 
+                    linestyle = '-', linewidth=linewidth_alpha["mean"][0], alpha=linewidth_alpha["mean"][1])
+        plt.text(x=len(valid_file_id_pred)-50,y=mean_fde_k_1+0.1,s=mean_fde_k_1, fontweight="bold", fontsize=8)
+                #  color=colours["fde_k_1"])
+        
+        plt.axhline(y = mean_fde_k_6, color=colours["fde_k_6"], 
+                    linestyle = '-', linewidth=linewidth_alpha["mean"][0], alpha=linewidth_alpha["mean"][1])
+        plt.text(x=len(valid_file_id_pred)-50,y=mean_fde_k_6+0.1,s=mean_fde_k_6, fontweight="bold", fontsize=8)
+                #  color=colours["fde_k_6"])
+   
         plt.xlabel("Frame")
         plt.ylabel("L2 error")
         plt.legend()
@@ -363,10 +412,11 @@ def main():
     
     motion_predictor = Motion_Predictor(get_model=PREDICT_AGENTS)
     
-    # generate_groundtruth(obs_len=motion_predictor.OBS_LEN,
-    #                      pred_len=motion_predictor.PRED_LEN)
+    generate_groundtruth(obs_len=motion_predictor.OBS_LEN,
+                         pred_len=motion_predictor.PRED_LEN)
 
     compute_predictions(motion_predictor)
+    
     # if PLOT_SCENARIO: generate_gif()
                            
 if __name__ == "__main__":

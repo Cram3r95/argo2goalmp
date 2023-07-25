@@ -72,7 +72,7 @@ class Motion_Predictor():
         
         if get_model: self.prediction_network = self.get_prediction_model()
 
-        self.CONFIDENCE_THRESHOLD = 0.1 # The mode must have at least 0.2 out of 1.0 to be plotted
+        self.CONFIDENCE_THRESHOLD = 0.2 # The mode must have at least 0.2 out of 1.0 to be plotted
         self.pub_predictions_marker = rospy.Publisher("/t4ac/perception/prediction/prediction_markers", MarkerArray, queue_size=10)
         
     def get_prediction_model(self):
@@ -138,8 +138,8 @@ class Motion_Predictor():
 
         valid_agents_info = []
         valid_agents_id = []
-
-        for agent_id in agents_id:
+        
+        for agent_index, agent_id in enumerate(agents_id):
             agent_info = agents_info_array[agents_info_array[:, 0] == agent_id]
 
             # if not (agent_info[:, -1] == 0).all():  # Avoid storing full-padded agents
@@ -264,6 +264,8 @@ class Motion_Predictor():
         """
         """
         
+        lifetime = 0.2
+        
         predictions_markers_list = MarkerArray()
         
         assert self.NUM_MODES == len(confidences[0]) 
@@ -303,7 +305,7 @@ class Motion_Predictor():
                     agent_predictions_marker.color.r = colour[0]
                     agent_predictions_marker.color.g = colour[1]
                     agent_predictions_marker.color.b = colour[2]
-                else:
+                else: # Green
                     agent_predictions_marker.color.r = 0.2
                     agent_predictions_marker.color.g = 0.4
                     agent_predictions_marker.color.b = 0.0
@@ -367,5 +369,37 @@ class Motion_Predictor():
                 agent_prediction_end_point_marker.pose.position.z = 0
                 
                 predictions_markers_list.markers.append(agent_prediction_end_point_marker)
+                
+                # Confidence text
+                
+                # agent_prediction_confidence_marker = Marker()
+                # agent_prediction_confidence_marker.header.frame_id = "/map"
+                # agent_prediction_confidence_marker.header.stamp = timestamp
+            
+                # agent_prediction_confidence_marker.ns = f"agent_{valid_agents_id[num_agent]}_predictions_confidences"
+                
+                # agent_prediction_confidence_marker.action = agent_prediction_confidence_marker.ADD
+                # agent_prediction_confidence_marker.lifetime = rospy.Duration.from_sec(lifetime)
+
+                # agent_prediction_confidence_marker.id = num_agent * agent_predictions.shape[0] + num_mode
+                # agent_prediction_confidence_marker.type = Marker.TEXT_VIEW_FACING
+                
+                # agent_prediction_confidence_marker.text = str(round(confidences[num_agent][num_mode],2))
+                
+                # agent_prediction_confidence_marker.color.a = 1.0
+
+                # agent_prediction_confidence_marker.color.r = 0
+                # agent_prediction_confidence_marker.color.g = 0
+                # agent_prediction_confidence_marker.color.b = 0
+                
+                # agent_prediction_confidence_marker.scale.z = 2.0
+                
+                # agent_prediction_confidence_marker.pose.orientation.w = 1.0
+
+                # agent_prediction_confidence_marker.pose.position.x = curr_agent_predictions[-1,0] + 1
+                # agent_prediction_confidence_marker.pose.position.y = curr_agent_predictions[-1,1] + 1
+                # agent_prediction_confidence_marker.pose.position.z = 0
+                
+                # predictions_markers_list.markers.append(agent_prediction_confidence_marker)
                 
         self.pub_predictions_marker.publish(predictions_markers_list)
