@@ -44,8 +44,8 @@ from evaluate.utils.plot_functions import plot_actor_tracks, plot_polylines, plo
     
 # Global variables
 
-GENERATE_GROUNDTRUTH = False
-PLOT_SCENARIO = False
+GENERATE_GROUNDTRUTH = True
+PLOT_SCENARIO = True
 PREDICT_AGENTS = True
 COMPUTE_METRICS = True
 INTERPOLATE_METRICS = False
@@ -59,7 +59,8 @@ routes[4] = "route27_town03_training"
 
 SCENARIO_ID = 1
 
-RELATIVE_ROUTE = f"data/datasets/CARLA/scenario_{routes[SCENARIO_ID]}"
+# RELATIVE_ROUTE = f"data/datasets/CARLA/scenario_{routes[SCENARIO_ID]}"
+RELATIVE_ROUTE = f"data/datasets/SUMO"
 BASE_STRING = "poses"
 ADDITIONAL_STRING = "poses_"
 OBSERVATIONS_DIR = os.path.join(BASE_DIR,RELATIVE_ROUTE,BASE_STRING)
@@ -444,7 +445,7 @@ def main():
     
     if GENERATE_GROUNDTRUTH:
         generate_groundtruth(obs_len=motion_predictor.OBS_LEN,
-                            pred_len=motion_predictor.PRED_LEN)
+                             pred_len=motion_predictor.PRED_LEN)
 
     compute_predictions(motion_predictor)
     
